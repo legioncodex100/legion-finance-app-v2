@@ -1005,3 +1005,93 @@ Week Total shows:
 > - Editing monthly updates only that specific month
 > - Q total = Sum of 3 months in that quarter
 
+---
+
+## Session Notes: January 13, 2026 (Part 2 - Vercel Deployment & Security)
+
+### Vercel Deployment
+
+**Repository:** `https://github.com/legioncodex100/legion-finance-app-v2`
+
+**Build Issues Resolved:**
+
+1. **Static Prerendering Error** - Login page and dashboard layout were trying to prerender with Supabase client
+   - **Fix:** Added `export const dynamic = 'force-dynamic'` to:
+     - `/src/app/(auth)/login/page.tsx`
+     - `/src/app/(dashboard)/layout.tsx`
+   - Split login into server wrapper + client form component
+
+2. **Environment Variables Not Loading**
+   - Debug endpoint created to verify: `hasSupabaseUrl: false`
+   - **Fix:** User needed to manually add env vars in Vercel dashboard:
+     - `NEXT_PUBLIC_SUPABASE_URL`
+     - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+     - Plus all Mindbody, Gemini, Starling keys
+
+---
+
+### Security Audit & Hardening
+
+**RLS (Row Level Security) Status:**
+- ✅ All 37 tables have RLS enabled
+- ✅ Fixed `categories` table policy (was `USING (true)`, now `USING (auth.uid() = user_id)`)
+
+**Security Layers Implemented:**
+
+| Layer | Protection |
+|-------|------------|
+| **Edge Middleware** | Route protection before render |
+| **Server Components** | Auth check in dashboard layout |
+| **Supabase RLS** | 37 tables with user-scoped policies |
+| **HTTPS/SSL** | Vercel automatic |
+
+---
+
+### Auth Middleware
+
+**New File:** `/src/middleware.ts`
+
+**Features:**
+- Protects all dashboard routes at the edge (before render)
+- Redirects unauthenticated users to `/login`
+- Redirects logged-in users away from `/login` to `/`
+- Refreshes session tokens automatically
+- Excludes API routes, static files, images
+
+**Protected Paths:**
+```typescript
+const protectedPaths = [
+    '/', '/transactions', '/budget', '/cash-flow', '/bills',
+    '/debts', '/invoices', '/staff', '/vendors', '/categories',
+    '/creditors', '/assets', '/reports', '/balance-sheet',
+    '/accounts-payable', '/reconciliation', '/settings', '/mindbody',
+]
+```
+
+---
+
+### Files Modified/Created
+
+| File | Change |
+|------|--------|
+| `/src/middleware.ts` | NEW - Edge auth middleware |
+| `/src/app/(auth)/login/page.tsx` | Server wrapper with dynamic export |
+| `/src/app/(auth)/login/login-form.tsx` | NEW - Client form component |
+| `/src/app/(dashboard)/layout.tsx` | Added dynamic export |
+| `security-audit-rls.sql` | NEW - RLS audit/hardening script |
+
+---
+
+### Key Learnings
+
+> [!IMPORTANT]
+> **Next.js Dynamic Export in Client Components**
+> 
+> The `export const dynamic = 'force-dynamic'` directive only works in **server components**.
+> For client components, create a server wrapper that sets the dynamic export, then renders the client component.
+
+> [!CAUTION]
+> **Vercel Environment Variables**
+> 
+> After adding env vars in Vercel dashboard, you MUST redeploy for them to take effect.
+> Use the debug endpoint pattern to verify: `GET /api/debug-env` returns env status.
