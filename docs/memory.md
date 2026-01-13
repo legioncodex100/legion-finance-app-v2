@@ -255,7 +255,7 @@ app/(dashboard)/
 > 
 > Multiple files significantly exceed the 150-line limit:
 > - `reconciliation-modal.tsx` (1,578 lines)
-> - `budget/page.tsx` (1,502 lines)
+> - ~~`budget/page.tsx` (1,502 lines)~~ ✅ Refactored into 9 components
 > - `transactions/page.tsx` (1,484 lines)
 > - `budget.ts` server actions (1,253 lines)
 > 
@@ -923,3 +923,85 @@ Week Total shows:
 - Skip projection if payable already exists for that staff member
 
 **Plan Location**: `/brain/implementation_plan.md`
+
+---
+
+## Session Notes: January 13, 2026 (Budget Page Refactoring)
+
+### Budget Page Component Extraction
+
+**Complete refactor** of the budget page from a corrupted 1,821-line monolith into modular components.
+
+**Final Component Structure**:
+
+| Component | Lines | Purpose |
+|-----------|-------|---------|
+| `page.tsx` | 148 | Main tab navigation |
+| `BudgetScenariosTab.tsx` | 167 | Create/delete/duplicate scenarios |
+| `BudgetEditorTab.tsx` | 295 | Yearly budget editor orchestrator |
+| `BudgetTrackingTab.tsx` | 265 | Budget vs Actual tracking |
+| `MonthlyBudgetEditor.tsx` | 447 | Monthly budget breakdown |
+| `QuarterLockGrid.tsx` | 68 | Quarter lock/unlock controls |
+| `ScenarioNotesEditor.tsx` | 106 | Scenario notes with AI cleanup |
+| `CategoryHierarchyTable.tsx` | 196 | Expandable category tree |
+| `budget-utils.ts` | 82 | Shared helper functions |
+
+**New Features Added**:
+
+1. **Month Selector Toggle** in Monthly Editor
+   - `All Q1` shows 3 monthly columns + Q total
+   - Individual month (Jan/Feb/Mar) shows Budget/Actual/Variance
+
+2. **Click-to-Edit Budget Cells**
+   - Direct click on budget value to edit (no icon)
+   - Press Enter to save, Escape to cancel
+   - Hover effect shows editability
+
+3. **Variance Display**
+   - Green = under budget (good)
+   - Red = over budget (needs attention)
+   - Shows +/- variance amount
+
+**Files Created**:
+| File | Path |
+|------|------|
+| BudgetScenariosTab | `/budget/components/BudgetScenariosTab.tsx` |
+| BudgetEditorTab | `/budget/components/BudgetEditorTab.tsx` |
+| BudgetTrackingTab | `/budget/components/BudgetTrackingTab.tsx` |
+| MonthlyBudgetEditor | `/budget/components/MonthlyBudgetEditor.tsx` |
+| QuarterLockGrid | `/budget/components/QuarterLockGrid.tsx` |
+| ScenarioNotesEditor | `/budget/components/ScenarioNotesEditor.tsx` |
+| CategoryHierarchyTable | `/budget/components/CategoryHierarchyTable.tsx` |
+| Utils | `/budget/utils/budget-utils.ts` |
+| Types | `/budget/utils/budget-types.ts` |
+| Index (components) | `/budget/components/index.ts` |
+| Index (utils) | `/budget/utils/index.ts` |
+
+**Technical Fixes**:
+- Fixed infinite loop in MonthlyBudgetEditor (useCallback dependency on array)
+- Removed `yearlyConfirmed` restriction from monthly editing
+- Added proper barrel exports for clean imports
+
+**Git Setup**:
+- Repository: `https://github.com/legioncodex100/legion-finance-app-v2.git`
+- First push to `main` branch with all Legion Finance code
+
+---
+
+### Key Learnings
+
+> [!IMPORTANT]
+> **React useCallback Dependencies**
+> 
+> Never include computed arrays (like `quarterMonths`) in useCallback dependencies.
+> They get recreated on every render, causing infinite loops.
+> Instead, compute them inside the callback.
+
+> [!TIP]
+> **Budget Data Flow**
+> 
+> - Yearly total = Sum of all 12 monthly budgets
+> - Editing yearly divides by 12 across all months
+> - Editing monthly updates only that specific month
+> - Q total = Sum of 3 months in that quarter
+
