@@ -1,3 +1,6 @@
+// Force dynamic rendering - Supabase client needs env vars at runtime
+export const dynamic = 'force-dynamic'
+
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
 import { AppSidebar } from "@/components/nav-sidebar"
