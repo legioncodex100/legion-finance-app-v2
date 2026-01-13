@@ -1,0 +1,1820 @@
+"use client"
+
+import * as React from "react"
+import { Plus, Check, MoreVertical, Copy, Trash2, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Loader2, RefreshCcw, Lock, Unlock, Eye, Edit3, BarChart3, Sparkles } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+    getBudgetScenarios,
+    createBudgetScenario,
+    setActiveScenario,
+    duplicateScenario,
+    deleteScenario,
+    getBudgetVsActual,
+    getCategoryTransactions,
+    lockQuarter,
+    unlockQuarter,
+    getBudgetEditorHierarchy,
+    confirmYearlyBudget,
+    getMonthlyBudgetData,
+    updateMonthlyBudget,
+    renameScenario,
+    updateScenarioNotes,
+    cleanupBudgetNotes,
+    getLiveActuals,
+    BudgetScenario,
+    BvAClass,
+    EditorClass,
+    MonthlyBudgetRow,
+    ActualsByMonth
+} from "@/lib/actions/budget"
+
+type TabType = 'scenarios' | 'editor' | 'tracking'
+type EditorSubTab = 'yearly' | 'monthly'
+
+export default function BudgetPage() {
+    const [activeTab, setActiveTab] = React.useState<TabType>('scenarios')
+    const [scenarios, setScenarios] = React.useState<BudgetScenario[]>([])
+    const [bvaData, setBvaData] = React.useState<BvAClass[]>([])
+    const [editorHierarchy, setEditorHierarchy] = React.useState<EditorClass[]>([])
+    const [isLoading, setIsLoading] = React.useState(true)
+    const [isCreating, setIsCreating] = React.useState(false)
+    const [isLoadingEditor, setIsLoadingEditor] = React.useState(false)
+
+    // Editor sub-tabs
+    const [editorSubTab, setEditorSubTab] = React.useState<EditorSubTab>('yearly')
+    const [selectedQuarter, setSelectedQuarter] = React.useState<1 | 2 | 3 | 4>(1)
+    const [monthlyData, setMonthlyData] = React.useState<MonthlyBudgetRow[]>([])
+    const [liveActuals, setLiveActuals] = React.useState<ActualsByMonth>({})
+    const [isLoadingMonthly, setIsLoadingMonthly] = React.useState(false)
+    const [showMonthlyBreakdown, setShowMonthlyBreakdown] = React.useState(true) // Toggle for monthly columns
+    const [selectedMonth, setSelectedMonth] = React.useState<null | 1 | 2 | 3>(null) // null = all months, 1/2/3 = specific month in quarter
+
+    // New scenario form
+    const [showNewForm, setShowNewForm] = React.useState(false)
+    const [newName, setNewName] = React.useState("")
+    const [seedFromPrevious, setSeedFromPrevious] = React.useState(true)
+
+    // Selected scenario for editing (can be any scenario, not just active)
+    const [selectedScenarioId, setSelectedScenarioId] = React.useState<string | null>(null)
+
+    // Expand/collapse state for editor
+    const [expandedEditorClasses, setExpandedEditorClasses] = React.useState<Set<string>>(new Set())
+    const [expandedEditorGroups, setExpandedEditorGroups] = React.useState<Set<string>>(new Set())
+    const [expandedEditorCategories, setExpandedEditorCategories] = React.useState<Set<string>>(new Set())
+    const [editorTransactions, setEditorTransactions] = React.useState<Record<string, any[]>>({})
+    const [loadingEditorTx, setLoadingEditorTx] = React.useState<string | null>(null)
+
+    // Inline budget editing state - stores local edits before saving
+    const [editingBudgets, setEditingBudgets] = React.useState<Record<string, number>>({})
+    const [savingBudget, setSavingBudget] = React.useState<string | null>(null)
+    const [editingCellId, setEditingCellId] = React.useState<string | null>(null)
+    const [editValue, setEditValue] = React.useState<string>("")
+
+    // Scenario name editing state
+    const [editingScenarioName, setEditingScenarioName] = React.useState(false)
+    const [scenarioNameValue, setScenarioNameValue] = React.useState("")
+
+    // Scenario notes editing state
+    const [editingNotes, setEditingNotes] = React.useState(false)
+    const [notesValue, setNotesValue] = React.useState("")
+    const [isCleaningNotes, setIsCleaningNotes] = React.useState(false)
+
+    // Expand/collapse for BvA view
+    const [expandedClasses, setExpandedClasses] = React.useState<Set<string>>(new Set())
+    const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set())
+    const [expandedCategories, setExpandedCategories] = React.useState<Set<string>>(new Set())
+    const [categoryTransactions, setCategoryTransactions] = React.useState<Record<string, any[]>>({})
+    const [loadingTransactions, setLoadingTransactions] = React.useState<string | null>(null)
+
+    const year = 2026
+
+    // Format currency with commas
+    const formatCurrency = (amount: number) => {
+        return amount.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    }
+
+    const activeScenario = scenarios.find(s => s.is_active)
+    const selectedScenario = scenarios.find(s => s.id === selectedScenarioId) || scenarios[0]
+
+    const fetchScenarios = React.useCallback(async () => {
+        setIsLoading(true)
+        const data = await getBudgetScenarios(year)
+        setScenarios(data)
+        setIsLoading(false)
+    }, [year])
+
+    const fetchBvaData = React.useCallback(async () => {
+        const bva = await getBudgetVsActual(year)
+        setBvaData(bva)
+        setExpandedClasses(new Set(bva.map(c => c.classId)))
+    }, [year])
+
+    const fetchEditorData = React.useCallback(async (scenarioId: string) => {
+        if (!scenarioId) return
+        setIsLoadingEditor(true)
+        const data = await getBudgetEditorHierarchy(scenarioId)
+        // Sort: REVENUE first, then other classes
+        const sorted = [...data].sort((a, b) => {
+            if (a.code === 'REVENUE') return -1
+            if (b.code === 'REVENUE') return 1
+            return 0
+        })
+        setEditorHierarchy(sorted)
+        // Auto-expand all classes AND groups
+        setExpandedEditorClasses(new Set(sorted.map(c => c.id)))
+        const allGroupIds = sorted.flatMap(c => c.categoryGroups.map(g => g.id))
+        setExpandedEditorGroups(new Set(allGroupIds))
+        setIsLoadingEditor(false)
+    }, [])
+
+    const fetchMonthlyData = React.useCallback(async (scenarioId: string, quarter: 1 | 2 | 3 | 4) => {
+        if (!scenarioId) return
+        setIsLoadingMonthly(true)
+
+        // Get months for quarter (1-based)
+        const quarterMonths = quarter === 1 ? [1, 2, 3]
+            : quarter === 2 ? [4, 5, 6]
+                : quarter === 3 ? [7, 8, 9]
+                    : [10, 11, 12]
+
+        const [data, actuals] = await Promise.all([
+            getMonthlyBudgetData(scenarioId, quarter),
+            getLiveActuals(year, quarterMonths)
+        ])
+        setMonthlyData(data)
+        setLiveActuals(actuals)
+        setIsLoadingMonthly(false)
+    }, [year])
+
+    React.useEffect(() => {
+        fetchScenarios()
+    }, [fetchScenarios])
+
+    React.useEffect(() => {
+        if (activeTab === 'tracking' && activeScenario) {
+            fetchBvaData()
+        }
+    }, [activeTab, activeScenario, fetchBvaData])
+
+    React.useEffect(() => {
+        if (activeTab === 'editor' && selectedScenario) {
+            if (editorSubTab === 'yearly') {
+                fetchEditorData(selectedScenario.id)
+            } else {
+                fetchMonthlyData(selectedScenario.id, selectedQuarter)
+            }
+        }
+    }, [activeTab, selectedScenario, editorSubTab, selectedQuarter, fetchEditorData, fetchMonthlyData])
+
+    const handleCreateScenario = async () => {
+        setIsCreating(true)
+        await createBudgetScenario(newName || `Budget ${year}`, year, seedFromPrevious)
+        setShowNewForm(false)
+        setNewName("")
+        await fetchScenarios()
+        setIsCreating(false)
+    }
+
+    const handleSetActive = async (id: string) => {
+        await setActiveScenario(id)
+        await fetchScenarios()
+    }
+
+    const handleDuplicate = async (id: string) => {
+        const scenario = scenarios.find(s => s.id === id)
+        if (!scenario) return
+        await duplicateScenario(id, `${scenario.name} (Copy)`)
+        await fetchScenarios()
+    }
+
+    const handleDelete = async (id: string) => {
+        if (!confirm("Delete this budget scenario?")) return
+        await deleteScenario(id)
+        await fetchScenarios()
+    }
+
+    const handleLockQuarter = async (quarter: 1 | 2 | 3 | 4) => {
+        if (!selectedScenario) return
+        await lockQuarter(selectedScenario.id, quarter)
+        await fetchScenarios()
+    }
+
+    const handleUnlockQuarter = async (quarter: 1 | 2 | 3 | 4) => {
+        if (!selectedScenario) return
+        if (!confirm(`Unlock Q${quarter}? This allows budget edits but removes actuals tracking.`)) return
+        await unlockQuarter(selectedScenario.id, quarter)
+        await fetchScenarios()
+    }
+
+    // Handle inline budget save - saves yearly total for a category (distributed evenly across 12 months)
+    const handleBudgetSave = async (categoryId: string, yearlyAmount: number) => {
+        if (!selectedScenario || hasAnyLockedQuarter) return
+        setSavingBudget(categoryId)
+
+        // Distribute yearly amount precisely: use floor for months 1-11, remainder goes to month 12
+        const monthlyBase = Math.floor((yearlyAmount / 12) * 100) / 100
+        const remainder = Math.round((yearlyAmount - (monthlyBase * 11)) * 100) / 100
+
+        // Save to all 12 months
+        for (let month = 1; month <= 11; month++) {
+            await updateMonthlyBudget(selectedScenario.id, categoryId, month, monthlyBase)
+        }
+        // Month 12 gets the remainder to ensure exact total
+        await updateMonthlyBudget(selectedScenario.id, categoryId, 12, remainder)
+
+        // Update local state optimistically - recalculate totals at all levels
+        setEditorHierarchy(prev => prev.map(cls => {
+            // Update subcategories first
+            const updatedGroups = cls.categoryGroups.map(grp => {
+                const updatedSubs = grp.subCategories.map(sub =>
+                    sub.id === categoryId
+                        ? { ...sub, budget: yearlyAmount, change: yearlyAmount - sub.reference }
+                        : sub
+                )
+                const groupBudget = updatedSubs.reduce((sum, s) => sum + s.budget, 0)
+                const groupRef = updatedSubs.reduce((sum, s) => sum + s.reference, 0)
+                return {
+                    ...grp,
+                    subCategories: updatedSubs,
+                    totalBudget: groupBudget,
+                    totalReference: grp.totalReference,
+                    totalChange: groupBudget - groupRef
+                }
+            })
+            // Recalculate class totals from updated groups
+            const classBudget = updatedGroups.reduce((sum, g) => sum + g.totalBudget, 0)
+            const classRef = updatedGroups.reduce((sum, g) => sum + g.totalReference, 0)
+            return {
+                ...cls,
+                categoryGroups: updatedGroups,
+                totalBudget: classBudget,
+                totalReference: classRef,
+                totalChange: classBudget - classRef
+            }
+        }))
+
+        setSavingBudget(null)
+    }
+
+    // Handler for saving individual monthly budget values
+    const handleMonthlyBudgetSave = async (categoryId: string, monthIndex: 1 | 2 | 3, amount: number) => {
+        if (!selectedScenario) return
+
+        // Calculate actual month number (1-12) based on quarter and monthIndex
+        const quarterMonths = selectedQuarter === 1 ? [1, 2, 3]
+            : selectedQuarter === 2 ? [4, 5, 6]
+                : selectedQuarter === 3 ? [7, 8, 9]
+                    : [10, 11, 12]
+        const actualMonth = quarterMonths[monthIndex - 1]
+
+        setSavingBudget(`${categoryId}-${monthIndex}`)
+
+        await updateMonthlyBudget(selectedScenario.id, categoryId, actualMonth, amount)
+
+        // Refresh monthly data to reflect the change
+        const [data, actuals] = await Promise.all([
+            getMonthlyBudgetData(selectedScenario.id, selectedQuarter),
+            getLiveActuals(year, quarterMonths)
+        ])
+        setMonthlyData(data)
+        setLiveActuals(actuals)
+
+        setSavingBudget(null)
+        setEditingCellId(null)
+    }
+
+    const toggleClass = (classId: string) => {
+        const newExpanded = new Set(expandedClasses)
+        if (newExpanded.has(classId)) {
+            newExpanded.delete(classId)
+        } else {
+            newExpanded.add(classId)
+        }
+        setExpandedClasses(newExpanded)
+    }
+
+    const toggleGroup = (groupId: string) => {
+        const newExpanded = new Set(expandedGroups)
+        if (newExpanded.has(groupId)) {
+            newExpanded.delete(groupId)
+        } else {
+            newExpanded.add(groupId)
+        }
+        setExpandedGroups(newExpanded)
+    }
+
+    const toggleCategory = async (categoryId: string) => {
+        const newExpanded = new Set(expandedCategories)
+        if (newExpanded.has(categoryId)) {
+            newExpanded.delete(categoryId)
+        } else {
+            newExpanded.add(categoryId)
+            if (!categoryTransactions[categoryId]) {
+                setLoadingTransactions(categoryId)
+                const txs = await getCategoryTransactions(categoryId, year)
+                setCategoryTransactions(prev => ({ ...prev, [categoryId]: txs }))
+                setLoadingTransactions(null)
+            }
+        }
+        setExpandedCategories(newExpanded)
+    }
+
+    const hasLockedQuarters = activeScenario && (
+        activeScenario.q1_locked || activeScenario.q2_locked ||
+        activeScenario.q3_locked || activeScenario.q4_locked
+    )
+
+    // For selected scenario (in editor)
+    const hasAnyLockedQuarter = selectedScenario && (
+        selectedScenario.q1_locked || selectedScenario.q2_locked ||
+        selectedScenario.q3_locked || selectedScenario.q4_locked
+    )
+
+    // Helper to check quarter lock status for selected scenario (in editor)
+    const getQuarterLockSelected = (q: 1 | 2 | 3 | 4) => {
+        if (!selectedScenario) return false
+        return selectedScenario[`q${q}_locked` as keyof BudgetScenario] as boolean
+    }
+
+    // Helper to check quarter lock status for active scenario (for tracking)
+    const getQuarterLock = (q: 1 | 2 | 3 | 4) => {
+        if (!activeScenario) return false
+        return activeScenario[`q${q}_locked` as keyof BudgetScenario] as boolean
+    }
+
+    return (
+        <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-black dark:to-zinc-950 p-6 space-y-6">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+                <div>
+                    <h1 className="text-3xl font-black tracking-tight">{year} Budget</h1>
+                    <p className="text-muted-foreground">Plan, commit, and track your financial targets</p>
+                </div>
+                {activeScenario && (
+                    <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-950/30 px-4 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                        <Check className="h-4 w-4 text-emerald-600" />
+                        <span className="font-bold text-emerald-700 dark:text-emerald-400">{activeScenario.name}</span>
+                    </div>
+                )}
+            </div>
+
+            {/* Tab Navigation */}
+            <div className="flex gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-2">
+                <button
+                    onClick={() => setActiveTab('scenarios')}
+                    className={`px-4 py-2 rounded-t-lg font-semibold text-sm transition-colors ${activeTab === 'scenarios'
+                        ? 'bg-white dark:bg-zinc-900 border border-b-0 border-zinc-200 dark:border-zinc-800'
+                        : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                >
+                    <Eye className="h-4 w-4 inline mr-2" />
+                    Scenarios
+                </button>
+                <button
+                    onClick={() => setActiveTab('editor')}
+                    disabled={scenarios.length === 0}
+                    className={`px-4 py-2 rounded-t-lg font-semibold text-sm transition-colors ${activeTab === 'editor'
+                        ? 'bg-white dark:bg-zinc-900 border border-b-0 border-zinc-200 dark:border-zinc-800'
+                        : 'text-muted-foreground hover:text-foreground'
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                    <Edit3 className="h-4 w-4 inline mr-2" />
+                    Editor
+                </button>
+                <button
+                    onClick={() => setActiveTab('tracking')}
+                    disabled={!hasLockedQuarters}
+                    className={`px-4 py-2 rounded-t-lg font-semibold text-sm transition-colors ${activeTab === 'tracking'
+                        ? 'bg-white dark:bg-zinc-900 border border-b-0 border-zinc-200 dark:border-zinc-800'
+                        : 'text-muted-foreground hover:text-foreground'
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                    <BarChart3 className="h-4 w-4 inline mr-2" />
+                    Tracking
+                    {!hasLockedQuarters && <span className="ml-2 text-[10px]">(lock a quarter first)</span>}
+                </button>
+            </div>
+
+            {/* TAB 1: SCENARIOS */}
+            {activeTab === 'scenarios' && (
+                <div className="space-y-6">
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-xl font-bold">Budget Scenarios</h2>
+                        <Button onClick={() => setShowNewForm(true)} className="gap-2">
+                            <Plus className="h-4 w-4" /> New Scenario
+                        </Button>
+                    </div>
+
+                    {/* New Scenario Form */}
+                    {showNewForm && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Create New Budget Scenario</CardTitle>
+                                <CardDescription>Start fresh or seed from {year - 1} actuals</CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="text-sm font-medium mb-1 block">Scenario Name</label>
+                                        <input
+                                            type="text"
+                                            value={newName}
+                                            onChange={e => setNewName(e.target.value)}
+                                            className="w-full h-10 px-3 rounded-lg border border-zinc-300 dark:border-zinc-700 dark:bg-zinc-900"
+                                            placeholder={`Budget ${year}`}
+                                        />
+                                    </div>
+                                    <label className="flex items-center gap-3 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={seedFromPrevious}
+                                            onChange={e => setSeedFromPrevious(e.target.checked)}
+                                            className="h-5 w-5 rounded border-zinc-300"
+                                        />
+                                        <div>
+                                            <span className="font-medium">Seed from {year - 1} actuals</span>
+                                            <p className="text-xs text-muted-foreground">Copy last year's transaction totals as starting point</p>
+                                        </div>
+                                    </label>
+                                </div>
+                                <div className="flex gap-2 justify-end pt-2">
+                                    <Button variant="outline" onClick={() => setShowNewForm(false)}>Cancel</Button>
+                                    <Button onClick={handleCreateScenario} disabled={isCreating}>
+                                        {isCreating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                                        Create Scenario
+                                    </Button>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Scenario Cards */}
+                    {isLoading ? (
+                        <div className="flex items-center justify-center py-12">
+                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : scenarios.length === 0 ? (
+                        <Card>
+                            <CardContent className="py-12 text-center">
+                                <p className="text-muted-foreground">No scenarios yet. Create your first budget scenario to get started.</p>
+                            </CardContent>
+                        </Card>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {scenarios.map(scenario => (
+                                <Card key={scenario.id} className={`relative ${scenario.is_active ? 'ring-2 ring-emerald-500' : ''}`}>
+                                    <CardHeader className="pb-2">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                {scenario.is_active && (
+                                                    <span className="bg-emerald-500 text-white text-[9px] px-2 py-0.5 rounded font-bold">ACTIVE</span>
+                                                )}
+                                                <CardTitle className="text-base">{scenario.name}</CardTitle>
+                                            </div>
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <button className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded">
+                                                        <MoreVertical className="h-4 w-4" />
+                                                    </button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    {!scenario.is_active && (
+                                                        <DropdownMenuItem onClick={() => handleSetActive(scenario.id)}>
+                                                            <Check className="h-4 w-4 mr-2" /> Set Active
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    <DropdownMenuItem onClick={() => handleDuplicate(scenario.id)}>
+                                                        <Copy className="h-4 w-4 mr-2" /> Duplicate
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuItem onClick={() => handleDelete(scenario.id)} className="text-rose-600">
+                                                        <Trash2 className="h-4 w-4 mr-2" /> Delete
+                                                    </DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <div className="flex gap-2 mt-2">
+                                            {[1, 2, 3, 4].map(q => {
+                                                const isLocked = scenario[`q${q}_locked` as keyof BudgetScenario]
+                                                return (
+                                                    <div
+                                                        key={q}
+                                                        className={`flex-1 text-center py-1 rounded text-xs font-bold ${isLocked
+                                                            ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'
+                                                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500'
+                                                            }`}
+                                                    >
+                                                        Q{q}
+                                                        {isLocked && <Lock className="h-2.5 w-2.5 inline ml-1" />}
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground mt-3 capitalize">
+                                            Status: {scenario.status || 'draft'}
+                                        </p>
+                                    </CardContent>
+                                </Card>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* TAB 2: EDITOR */}
+            {activeTab === 'editor' && scenarios.length > 0 && (
+                <div className="space-y-6">
+                    {/* Header with scenario selector and sub-tabs */}
+                    <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-6">
+                                <div>
+                                    <h2 className="text-lg font-bold">Budget Editor</h2>
+                                    <p className="text-xs text-muted-foreground">Plan your {year} budget</p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm text-muted-foreground">Scenario:</span>
+                                    {editingScenarioName ? (
+                                        /* Edit mode */
+                                        <div className="flex items-center gap-1">
+                                            <input
+                                                type="text"
+                                                autoFocus
+                                                value={scenarioNameValue}
+                                                onChange={e => setScenarioNameValue(e.target.value)}
+                                                onKeyDown={async e => {
+                                                    if (e.key === 'Enter' && selectedScenario) {
+                                                        await renameScenario(selectedScenario.id, scenarioNameValue)
+                                                        await fetchScenarios()
+                                                        setEditingScenarioName(false)
+                                                    } else if (e.key === 'Escape') {
+                                                        setEditingScenarioName(false)
+                                                    }
+                                                }}
+                                                className="h-9 px-3 rounded-lg border border-emerald-500 dark:bg-zinc-800 font-semibold text-sm w-48"
+                                            />
+                                            <button
+                                                onClick={async () => {
+                                                    if (selectedScenario) {
+                                                        await renameScenario(selectedScenario.id, scenarioNameValue)
+                                                        await fetchScenarios()
+                                                        setEditingScenarioName(false)
+                                                    }
+                                                }}
+                                                className="p-2 rounded bg-emerald-600 hover:bg-emerald-700 text-white"
+                                            >
+                                                <Check className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        /* Read mode */
+                                        <>
+                                            <select
+                                                value={selectedScenarioId || selectedScenario?.id || ''}
+                                                onChange={e => setSelectedScenarioId(e.target.value)}
+                                                className="h-9 px-3 pr-8 rounded-lg border border-zinc-300 dark:border-zinc-700 dark:bg-zinc-800 font-semibold text-sm"
+                                            >
+                                                {scenarios.map(s => (
+                                                    <option key={s.id} value={s.id}>
+                                                        {s.name} {s.is_active ? '✓' : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                onClick={() => {
+                                                    setScenarioNameValue(selectedScenario?.name || '')
+                                                    setEditingScenarioName(true)
+                                                }}
+                                                className="p-2 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-muted-foreground hover:text-foreground"
+                                                title="Rename scenario"
+                                            >
+                                                <Edit3 className="h-4 w-4" />
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => editorSubTab === 'yearly'
+                                    ? selectedScenario && fetchEditorData(selectedScenario.id)
+                                    : selectedScenario && fetchMonthlyData(selectedScenario.id, selectedQuarter)
+                                }
+                            >
+                                <RefreshCcw className="h-4 w-4 mr-2" /> Refresh
+                            </Button>
+                        </div>
+
+                        {/* Scenario Notes */}
+                        {selectedScenario && (
+                            <div className="bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                                {editingNotes ? (
+                                    <div className="space-y-2">
+                                        <textarea
+                                            value={notesValue}
+                                            onChange={e => setNotesValue(e.target.value)}
+                                            placeholder="Add context about this scenario (e.g., assumptions, targets, key changes)..."
+                                            className="w-full p-2 text-sm rounded border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-900 min-h-[80px] resize-none"
+                                            autoFocus
+                                        />
+                                        <div className="flex gap-2">
+                                            <Button
+                                                size="sm"
+                                                onClick={async () => {
+                                                    await updateScenarioNotes(selectedScenario.id, notesValue || null)
+                                                    await fetchScenarios()
+                                                    setEditingNotes(false)
+                                                }}
+                                            >
+                                                <Check className="h-3 w-3 mr-1" /> Save
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={!notesValue.trim() || isCleaningNotes}
+                                                onClick={async () => {
+                                                    if (!notesValue.trim()) return
+                                                    setIsCleaningNotes(true)
+                                                    // Calculate budget context from editorHierarchy
+                                                    const incomeClass = editorHierarchy.find(c => c.code === 'REVENUE')
+                                                    const expenseClasses = editorHierarchy.filter(c => c.code !== 'REVENUE')
+                                                    const result = await cleanupBudgetNotes(notesValue, {
+                                                        scenarioName: selectedScenario.name,
+                                                        year,
+                                                        totalBudgetIncome: incomeClass?.totalBudget || 0,
+                                                        totalBudgetExpenses: expenseClasses.reduce((s, c) => s + c.totalBudget, 0),
+                                                        netBudget: (incomeClass?.totalBudget || 0) - expenseClasses.reduce((s, c) => s + c.totalBudget, 0),
+                                                        totalReferenceIncome: incomeClass?.totalReference || 0,
+                                                        totalReferenceExpenses: expenseClasses.reduce((s, c) => s + c.totalReference, 0)
+                                                    })
+                                                    if (result.success) {
+                                                        setNotesValue(result.cleanedNotes)
+                                                    }
+                                                    setIsCleaningNotes(false)
+                                                }}
+                                                title="AI cleanup: fix grammar and improve clarity"
+                                            >
+                                                {isCleaningNotes ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                                                <span className="ml-1">AI Cleanup</span>
+                                            </Button>
+                                            <Button size="sm" variant="outline" onClick={() => setEditingNotes(false)}>
+                                                Cancel
+                                            </Button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="flex-1 text-sm text-amber-800 dark:text-amber-200">
+                                            {selectedScenario.notes ? (
+                                                <p>{selectedScenario.notes}</p>
+                                            ) : (
+                                                <p className="text-muted-foreground italic">No notes for this scenario. Click edit to add context.</p>
+                                            )}
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                setNotesValue(selectedScenario.notes || '')
+                                                setEditingNotes(true)
+                                            }}
+                                            className="p-1 rounded hover:bg-amber-200 dark:hover:bg-amber-800 text-amber-600 dark:text-amber-400"
+                                            title="Edit notes"
+                                        >
+                                            <Edit3 className="h-4 w-4" />
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Sub-tab toggles: Yearly / Monthly */}
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setEditorSubTab('yearly')}
+                                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${editorSubTab === 'yearly'
+                                    ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
+                                    : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                📅 Yearly
+                            </button>
+                            <button
+                                onClick={() => setEditorSubTab('monthly')}
+                                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${editorSubTab === 'monthly'
+                                    ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
+                                    : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                📆 Monthly
+                            </button>
+                            {!selectedScenario?.yearly_confirmed && editorSubTab === 'monthly' && (
+                                <span className="text-xs text-amber-600 dark:text-amber-400 ml-2">
+                                    (View only - confirm yearly budget to edit monthly)
+                                </span>
+                            )}
+                            {hasAnyLockedQuarter && (
+                                <span className="ml-auto flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                                    <Lock className="h-3 w-3" /> Yearly budget is locked
+                                </span>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* YEARLY VIEW */}
+                    {editorSubTab === 'yearly' && (
+                        <>
+                            {/* Yearly Budget Summary - with editable cells and Confirm button */}
+                            <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div>
+                                        <h3 className="font-bold">Annual Budget Planning</h3>
+                                        <p className="text-xs text-muted-foreground">Set your {year} targets. 2025 data is shown as reference.</p>
+                                    </div>
+                                    {!selectedScenario?.yearly_confirmed && !hasAnyLockedQuarter && (
+                                        <Button
+                                            onClick={async () => {
+                                                if (selectedScenario) {
+                                                    await confirmYearlyBudget(selectedScenario.id)
+                                                    fetchScenarios()
+                                                }
+                                            }}
+                                            className="bg-emerald-600 hover:bg-emerald-700"
+                                        >
+                                            <Check className="h-4 w-4 mr-2" /> Confirm Yearly & Unlock Monthly
+                                        </Button>
+                                    )}
+                                    {selectedScenario?.yearly_confirmed && !hasAnyLockedQuarter && (
+                                        <span className="text-xs text-emerald-600 flex items-center gap-1">
+                                            <Check className="h-4 w-4" /> Yearly confirmed  Monthly view unlocked
+                                        </span>
+                                    )}
+                                </div>
+
+                                {/* Quarter Lock Status - Horizontal bar design */}
+                                <div className="mb-4 p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="text-sm font-semibold">Quarterly Commitments</span>
+                                        <span className="text-xs text-muted-foreground">Lock quarters when ready to track actuals</span>
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-3">
+                                        {([1, 2, 3, 4] as const).map(q => {
+                                            const isLocked = getQuarterLockSelected(q)
+                                            const months = q === 1 ? 'Jan · Feb · Mar' : q === 2 ? 'Apr · May · Jun' : q === 3 ? 'Jul · Aug · Sep' : 'Oct · Nov · Dec'
+                                            return (
+                                                <div
+                                                    key={q}
+                                                    className={`relative overflow-hidden rounded-xl border-2 transition-all ${isLocked
+                                                        ? 'border-emerald-500 bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-950/50 dark:to-emerald-900/30'
+                                                        : 'border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 hover:border-zinc-300 dark:hover:border-zinc-600'
+                                                        }`}
+                                                >
+                                                    <div className="p-4">
+                                                        <div className="flex items-center justify-between mb-2">
+                                                            <span className={`text-2xl font-black ${isLocked ? 'text-emerald-700 dark:text-emerald-400' : 'text-zinc-400'}`}>
+                                                                Q{q}
+                                                            </span>
+                                                            {isLocked && (
+                                                                <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/50 px-2 py-0.5 rounded-full">
+                                                                    <Lock className="h-2.5 w-2.5" /> LOCKED
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-[11px] text-muted-foreground mb-3">{months}</p>
+                                                        {isLocked ? (
+                                                            <button
+                                                                onClick={() => handleUnlockQuarter(q)}
+                                                                className="w-full py-2 text-xs font-semibold rounded-lg border border-zinc-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
+                                                            >
+                                                                <Unlock className="h-3 w-3 inline mr-1.5" />
+                                                                Unlock to Edit
+                                                            </button>
+                                                        ) : (
+                                                            <button
+                                                                onClick={() => handleLockQuarter(q)}
+                                                                className="w-full py-2 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                                                            >
+                                                                <Lock className="h-3 w-3 inline mr-1.5" />
+                                                                Lock & Commit
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* Hierarchical Category Table: Class > Group > SubCategory */}
+                                <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                                    <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center">
+                                        <div>
+                                            <h3 className="font-bold">Categories with Budget vs Actual</h3>
+                                            <p className="text-xs text-muted-foreground">Click to expand groups and view subcategories</p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button size="sm" variant="outline">
+                                                        <ChevronDown className="h-4 w-4" />
+                                                        <span className="ml-2">Expand</span>
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    <DropdownMenuItem onClick={() => {
+                                                        // Expand all financial classes
+                                                        setExpandedEditorClasses(new Set(editorHierarchy.map(c => c.id)))
+                                                    }}>
+                                                        Expand Classes
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuItem onClick={() => {
+                                                        // Expand all category groups
+                                                        const allGroupIds: string[] = []
+                                                        editorHierarchy.forEach(c => c.categoryGroups.forEach(g => allGroupIds.push(g.id)))
+                                                        setExpandedEditorClasses(new Set(editorHierarchy.map(c => c.id)))
+                                                        setExpandedEditorGroups(new Set(allGroupIds))
+                                                    }}>
+                                                        Expand Categories
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuItem onClick={async () => {
+                                                        // Expand all subcategories (and load transactions)
+                                                        const allGroupIds: string[] = []
+                                                        const allSubIds: string[] = []
+                                                        editorHierarchy.forEach(c => {
+                                                            c.categoryGroups.forEach(g => {
+                                                                allGroupIds.push(g.id)
+                                                                g.subCategories.forEach(s => allSubIds.push(s.id))
+                                                            })
+                                                        })
+                                                        setExpandedEditorClasses(new Set(editorHierarchy.map(c => c.id)))
+                                                        setExpandedEditorGroups(new Set(allGroupIds))
+                                                        setExpandedEditorCategories(new Set(allSubIds))
+                                                        // Load transactions for all subcategories
+                                                        for (const subId of allSubIds) {
+                                                            if (!editorTransactions[subId]) {
+                                                                const data = await getCategoryTransactions(subId, year - 1)
+                                                                setEditorTransactions(prev => ({ ...prev, [subId]: data }))
+                                                            }
+                                                        }
+                                                    }}>
+                                                        Expand All + Transactions
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuSeparator />
+                                                    <DropdownMenuItem onClick={() => {
+                                                        // Collapse all
+                                                        setExpandedEditorClasses(new Set())
+                                                        setExpandedEditorGroups(new Set())
+                                                        setExpandedEditorCategories(new Set())
+                                                    }}>
+                                                        Collapse All
+                                                    </DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() => selectedScenario && fetchEditorData(selectedScenario.id)}
+                                                disabled={isLoadingEditor}
+                                                title="Refresh reference data"
+                                            >
+                                                <RefreshCcw className={`h-4 w-4 ${isLoadingEditor ? 'animate-spin' : ''}`} />
+                                                <span className="ml-2">Refresh</span>
+                                            </Button>
+                                        </div>
+                                    </div>
+
+                                    {/* Table Header */}
+                                    <div className="grid grid-cols-[1fr_130px_130px_100px] gap-3 px-4 py-2 bg-zinc-50 dark:bg-zinc-800/50 text-xs font-semibold text-muted-foreground border-b border-zinc-200 dark:border-zinc-800">
+                                        <div>Category</div>
+                                        <div className="text-right">Ref (2025)</div>
+                                        <div className="text-right">Budget</div>
+                                        <div className="text-right">Change</div>
+                                    </div>
+
+                                    {isLoadingEditor ? (
+                                        <div className="flex items-center justify-center py-12">
+                                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                        </div>
+                                    ) : editorHierarchy.length === 0 ? (
+                                        <div className="py-12 text-center text-muted-foreground">
+                                            No budget data. Create a scenario or seed from previous year.
+                                        </div>
+                                    ) : (
+                                        <div className="max-h-[500px] overflow-y-auto">
+                                            {editorHierarchy.map(cls => {
+                                                const isClassExpanded = expandedEditorClasses.has(cls.id)
+                                                const isIncome = cls.code === 'REVENUE'
+
+                                                return (
+                                                    <div key={cls.id} className="border-b border-zinc-200 dark:border-zinc-800 last:border-b-0">
+                                                        {/* Class Row */}
+                                                        <button
+                                                            onClick={() => {
+                                                                const newExpanded = new Set(expandedEditorClasses)
+                                                                if (newExpanded.has(cls.id)) newExpanded.delete(cls.id)
+                                                                else newExpanded.add(cls.id)
+                                                                setExpandedEditorClasses(newExpanded)
+                                                            }}
+                                                            className={`w-full grid grid-cols-[1fr_130px_130px_100px] gap-3 px-4 py-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${isIncome ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : ''
+                                                                }`}
+                                                        >
+                                                            <div className="flex items-center gap-2 font-bold">
+                                                                {isClassExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                                                                {cls.name}
+                                                                <span className="text-xs text-muted-foreground font-normal">({cls.categoryGroups.length})</span>
+                                                            </div>
+                                                            <div className="text-right tabular-nums text-muted-foreground">£{formatCurrency(cls.totalReference)}</div>
+                                                            <div className="text-right font-semibold tabular-nums">£{formatCurrency(cls.totalBudget)}</div>
+                                                            <div className={`text-right font-semibold tabular-nums ${(isIncome ? cls.totalChange >= 0 : cls.totalChange <= 0) ? 'text-emerald-600' : 'text-rose-600'
+                                                                }`}>
+                                                                {cls.totalChange >= 0 ? '+' : ''}£{formatCurrency(Math.abs(cls.totalChange))}
+                                                            </div>
+                                                        </button>
+
+                                                        {/* Category Groups */}
+                                                        {isClassExpanded && (
+                                                            <div>
+                                                                {cls.categoryGroups.map(group => {
+                                                                    const isGroupExpanded = expandedEditorGroups.has(group.id)
+
+                                                                    return (
+                                                                        <div key={group.id}>
+                                                                            {/* Group Row */}
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    const newExpanded = new Set(expandedEditorGroups)
+                                                                                    if (newExpanded.has(group.id)) newExpanded.delete(group.id)
+                                                                                    else newExpanded.add(group.id)
+                                                                                    setExpandedEditorGroups(newExpanded)
+                                                                                }}
+                                                                                className="w-full grid grid-cols-[1fr_130px_130px_100px] gap-3 px-4 py-2 pl-8 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 border-t border-zinc-100 dark:border-zinc-800"
+                                                                            >
+                                                                                <div className="flex items-center gap-2 font-medium text-sm">
+                                                                                    {group.subCategories.length > 0 ? (
+                                                                                        isGroupExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
+                                                                                    ) : <span className="w-3" />}
+                                                                                    {group.name}
+                                                                                    {group.subCategories.length > 0 && (
+                                                                                        <span className="text-[10px] text-muted-foreground">({group.subCategories.length})</span>
+                                                                                    )}
+                                                                                </div>
+                                                                                <div className="text-right text-sm text-muted-foreground tabular-nums">£{formatCurrency(group.totalReference)}</div>
+                                                                                <div className="text-right text-sm tabular-nums">£{formatCurrency(group.totalBudget)}</div>
+                                                                                <div className={`text-right text-xs font-semibold tabular-nums ${(isIncome ? group.totalChange >= 0 : group.totalChange <= 0) ? 'text-emerald-600' : 'text-rose-600'
+                                                                                    }`}>
+                                                                                    {group.totalChange >= 0 ? '+' : ''}£{formatCurrency(Math.abs(group.totalChange))}
+                                                                                </div>
+                                                                            </button>
+
+                                                                            {/* SubCategories */}
+                                                                            {isGroupExpanded && group.subCategories.length > 0 && (
+                                                                                <div className="bg-zinc-50/50 dark:bg-zinc-950/30">
+                                                                                    {group.subCategories.map(sub => {
+                                                                                        const isSubExpanded = expandedEditorCategories.has(sub.id)
+                                                                                        const txs = editorTransactions[sub.id] || []
+
+                                                                                        return (
+                                                                                            <div key={sub.id}>
+                                                                                                <div
+                                                                                                    role="button"
+                                                                                                    tabIndex={0}
+                                                                                                    onClick={async () => {
+                                                                                                        const newExpanded = new Set(expandedEditorCategories)
+                                                                                                        if (newExpanded.has(sub.id)) {
+                                                                                                            newExpanded.delete(sub.id)
+                                                                                                        } else {
+                                                                                                            newExpanded.add(sub.id)
+                                                                                                            if (!editorTransactions[sub.id]) {
+                                                                                                                setLoadingEditorTx(sub.id)
+                                                                                                                // Fetch previous year transactions (reference data source)
+                                                                                                                console.log('Fetching transactions for:', sub.id, sub.name, 'year:', year - 1)
+                                                                                                                const data = await getCategoryTransactions(sub.id, year - 1)
+                                                                                                                console.log('Received transactions:', data.length, 'for', sub.name)
+                                                                                                                setEditorTransactions(prev => ({ ...prev, [sub.id]: data }))
+                                                                                                                setLoadingEditorTx(null)
+                                                                                                            }
+                                                                                                        }
+                                                                                                        setExpandedEditorCategories(newExpanded)
+                                                                                                    }}
+                                                                                                    className="w-full grid grid-cols-[1fr_130px_130px_100px] gap-3 px-4 py-2 pl-14 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800 cursor-pointer"
+                                                                                                >
+                                                                                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                                                                        {isSubExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                                                                                        {sub.name}
+                                                                                                        {loadingEditorTx === sub.id && <Loader2 className="h-3 w-3 animate-spin" />}
+                                                                                                    </div>
+                                                                                                    <div className="text-right text-sm text-muted-foreground tabular-nums">£{formatCurrency(sub.reference)}</div>
+                                                                                                    <div className="text-right relative pr-6" onClick={e => e.stopPropagation()}>
+                                                                                                        {savingBudget === sub.id ? (
+                                                                                                            <Loader2 className="h-4 w-4 animate-spin absolute right-0 top-1/2 -translate-y-1/2" />
+                                                                                                        ) : editingCellId === sub.id ? (
+                                                                                                            /* Edit Mode: Input + Save */
+                                                                                                            <div className="flex items-center justify-end gap-1">
+                                                                                                                <input
+                                                                                                                    type="number"
+                                                                                                                    autoFocus
+                                                                                                                    className="w-20 h-6 px-2 text-right text-sm tabular-nums border border-emerald-500 rounded bg-white dark:bg-zinc-800 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                                                                                    value={editValue}
+                                                                                                                    onChange={(e) => setEditValue(e.target.value)}
+                                                                                                                    onKeyDown={(e) => {
+                                                                                                                        if (e.key === 'Enter') {
+                                                                                                                            const val = parseFloat(editValue) || 0
+                                                                                                                            handleBudgetSave(sub.id, val)
+                                                                                                                            setEditingCellId(null)
+                                                                                                                        } else if (e.key === 'Escape') {
+                                                                                                                            setEditingCellId(null)
+                                                                                                                        }
+                                                                                                                    }}
+                                                                                                                />
+                                                                                                                <button
+                                                                                                                    onClick={() => {
+                                                                                                                        const val = parseFloat(editValue) || 0
+                                                                                                                        handleBudgetSave(sub.id, val)
+                                                                                                                        setEditingCellId(null)
+                                                                                                                    }}
+                                                                                                                    className="p-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white"
+                                                                                                                >
+                                                                                                                    <Check className="h-3 w-3" />
+                                                                                                                </button>
+                                                                                                            </div>
+                                                                                                        ) : (
+                                                                                                            /* Read Mode: Value + Edit Icon */
+                                                                                                            <>
+                                                                                                                <span className="tabular-nums text-sm">£{formatCurrency(sub.budget)}</span>
+                                                                                                                {!hasAnyLockedQuarter && (
+                                                                                                                    <button
+                                                                                                                        onClick={() => {
+                                                                                                                            setEditingCellId(sub.id)
+                                                                                                                            setEditValue(sub.budget.toString())
+                                                                                                                        }}
+                                                                                                                        className="absolute right-0 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-muted-foreground hover:text-foreground"
+                                                                                                                    >
+                                                                                                                        <Edit3 className="h-3 w-3" />
+                                                                                                                    </button>
+                                                                                                                )}
+                                                                                                            </>
+                                                                                                        )}
+                                                                                                    </div>
+                                                                                                    <div className={`text-right text-xs font-medium tabular-nums ${(isIncome ? sub.change >= 0 : sub.change <= 0) ? 'text-emerald-600' : 'text-rose-600'
+                                                                                                        }`}>
+                                                                                                        {sub.change >= 0 ? '+' : ''}£{formatCurrency(Math.abs(sub.change))}
+                                                                                                    </div>
+                                                                                                </div>
+
+                                                                                                {/* Transaction Dropdown */}
+                                                                                                {isSubExpanded && (
+                                                                                                    <div className="bg-zinc-100 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800">
+                                                                                                        <div className="px-4 py-2 pl-20 text-xs font-semibold text-muted-foreground border-b border-zinc-200 dark:border-zinc-700">
+                                                                                                            {loadingEditorTx === sub.id ? 'Loading transactions...' : `Transactions (${txs.length})`}
+                                                                                                        </div>
+                                                                                                        {loadingEditorTx === sub.id ? (
+                                                                                                            <div className="px-4 py-3 pl-20 text-xs text-muted-foreground">
+                                                                                                                <Loader2 className="h-4 w-4 animate-spin inline mr-2" />
+                                                                                                                Loading...
+                                                                                                            </div>
+                                                                                                        ) : txs.length === 0 ? (
+                                                                                                            <div className="px-4 py-3 pl-20 text-xs text-muted-foreground italic">
+                                                                                                                No transactions found for {year - 1}
+                                                                                                            </div>
+                                                                                                        ) : (
+                                                                                                            <div className="max-h-[150px] overflow-y-auto">
+                                                                                                                {txs.map(tx => (
+                                                                                                                    <div key={tx.id} className="grid grid-cols-[70px,1fr,80px] gap-2 px-4 py-2 pl-20 text-xs border-b border-zinc-100 dark:border-zinc-800 last:border-b-0 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                                                                                                                        <span className="text-muted-foreground">{new Date(tx.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
+                                                                                                                        <div className="flex flex-col min-w-0">
+                                                                                                                            <span className="font-medium truncate">{tx.counterParty || tx.description}</span>
+                                                                                                                            {tx.counterParty && tx.description && tx.description !== tx.counterParty && (
+                                                                                                                                <span className="text-[10px] text-muted-foreground truncate">{tx.description}</span>
+                                                                                                                            )}
+                                                                                                                        </div>
+                                                                                                                        <span className="text-right tabular-nums font-medium">£{formatCurrency(Math.abs(tx.amount))}</span>
+                                                                                                                    </div>
+                                                                                                                ))}
+                                                                                                            </div>
+                                                                                                        )}
+                                                                                                    </div>
+                                                                                                )}
+                                                                                            </div>
+                                                                                        )
+                                                                                    })}
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    )
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Budget Summary Card */}
+                            {editorHierarchy.length > 0 && (() => {
+                                const incomeClass = editorHierarchy.find(c => c.code === 'REVENUE')
+                                const expenseClasses = editorHierarchy.filter(c => c.code !== 'REVENUE')
+
+                                const incomeRef = incomeClass?.totalReference || 0
+                                const incomeBudget = incomeClass?.totalBudget || 0
+                                const incomeChange = incomeBudget - incomeRef
+
+                                const expenseRef = expenseClasses.reduce((sum, c) => sum + c.totalReference, 0)
+                                const expenseBudget = expenseClasses.reduce((sum, c) => sum + c.totalBudget, 0)
+                                const expenseChange = expenseBudget - expenseRef
+
+                                const netRef = incomeRef - expenseRef
+                                const netBudget = incomeBudget - expenseBudget
+                                const netChange = netBudget - netRef
+
+                                return (
+                                    <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                                        <h3 className="font-bold mb-4">Budget Summary</h3>
+                                        <div className="grid grid-cols-4 gap-4 text-sm">
+                                            <div></div>
+                                            <div className="text-right text-muted-foreground font-semibold">Ref ({year - 1})</div>
+                                            <div className="text-right font-semibold">Budget ({year})</div>
+                                            <div className="text-right font-semibold">Change</div>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-4 text-sm py-3 border-b border-zinc-200 dark:border-zinc-700">
+                                            <div className="font-semibold text-emerald-600">💰 Income</div>
+                                            <div className="text-right text-muted-foreground tabular-nums">£{formatCurrency(incomeRef)}</div>
+                                            <div className="text-right font-semibold tabular-nums">£{formatCurrency(incomeBudget)}</div>
+                                            <div className={`text-right font-semibold tabular-nums ${incomeChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                {incomeChange >= 0 ? '+' : ''}£{formatCurrency(Math.abs(incomeChange))}
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-4 text-sm py-3 border-b border-zinc-200 dark:border-zinc-700">
+                                            <div className="font-semibold text-rose-600">💸 Expenses</div>
+                                            <div className="text-right text-muted-foreground tabular-nums">£{formatCurrency(expenseRef)}</div>
+                                            <div className="text-right font-semibold tabular-nums">£{formatCurrency(expenseBudget)}</div>
+                                            <div className={`text-right font-semibold tabular-nums ${expenseChange <= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                {expenseChange >= 0 ? '+' : ''}£{formatCurrency(Math.abs(expenseChange))}
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-4 text-sm py-3 bg-zinc-50 dark:bg-zinc-800/50 -mx-5 px-5 rounded-b-xl mt-3">
+                                            <div className="font-bold text-lg">📊 Net Position</div>
+                                            <div className={`text-right text-lg tabular-nums ${netRef >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                {netRef >= 0 ? '' : '-'}£{formatCurrency(Math.abs(netRef))}
+                                            </div>
+                                            <div className={`text-right text-lg font-bold tabular-nums ${netBudget >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                {netBudget >= 0 ? '' : '-'}£{formatCurrency(Math.abs(netBudget))}
+                                            </div>
+                                            <div className={`text-right text-lg font-bold tabular-nums ${netChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                {netChange >= 0 ? '+' : ''}£{formatCurrency(Math.abs(netChange))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )
+                            })()}
+                        </>
+                    )}
+
+                    {/* MONTHLY VIEW */}
+                    {editorSubTab === 'monthly' && (
+                        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                            {/* Quarter Selector */}
+                            <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+                                <div>
+                                    <h3 className="font-bold">Q{selectedQuarter} Budget Overview</h3>
+                                    <p className="text-xs text-muted-foreground">Compare your budget against actuals for this quarter.</p>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    {/* Quarter Tabs */}
+                                    {([1, 2, 3, 4] as const).map(q => (
+                                        <button
+                                            key={q}
+                                            onClick={() => {
+                                                setSelectedQuarter(q)
+                                                setSelectedMonth(null)
+                                            }}
+                                            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${selectedQuarter === q
+                                                ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
+                                                : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
+                                                }`}
+                                        >
+                                            Q{q}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Month Selector Row */}
+                            <div className="px-4 py-2 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+                                {(() => {
+                                    const monthNames = selectedQuarter === 1 ? ['Jan', 'Feb', 'Mar']
+                                        : selectedQuarter === 2 ? ['Apr', 'May', 'Jun']
+                                            : selectedQuarter === 3 ? ['Jul', 'Aug', 'Sep']
+                                                : ['Oct', 'Nov', 'Dec']
+                                    return (
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs text-muted-foreground mr-2">View:</span>
+                                            <button
+                                                onClick={() => setSelectedMonth(null)}
+                                                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedMonth === null
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'}`}
+                                            >
+                                                All Q{selectedQuarter}
+                                            </button>
+                                            {([1, 2, 3] as const).map(m => (
+                                                <button
+                                                    key={m}
+                                                    onClick={() => setSelectedMonth(m)}
+                                                    className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedMonth === m
+                                                        ? 'bg-blue-600 text-white'
+                                                        : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'}`}
+                                                >
+                                                    {monthNames[m - 1]}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )
+                                })()}
+                            </div>
+
+                            {/* Month Grid Headers */}
+                            {(() => {
+                                const monthNames = selectedQuarter === 1 ? ['Jan', 'Feb', 'Mar']
+                                    : selectedQuarter === 2 ? ['Apr', 'May', 'Jun']
+                                        : selectedQuarter === 3 ? ['Jul', 'Aug', 'Sep']
+                                            : ['Oct', 'Nov', 'Dec']
+
+                                // Build reference lookup from monthly data
+                                const refByCategory = new Map<string, number>()
+                                monthlyData.forEach(row => {
+                                    refByCategory.set(row.categoryId, row.qRefTotal)
+                                })
+
+                                // Get monthly values for a category
+                                const getMonthlyValues = (categoryId: string) => {
+                                    const row = monthlyData.find(r => r.categoryId === categoryId)
+                                    // Get actual for this category from live actuals
+                                    const categoryActuals = liveActuals[categoryId] || {}
+                                    const quarterMonths = selectedQuarter === 1 ? [1, 2, 3]
+                                        : selectedQuarter === 2 ? [4, 5, 6]
+                                            : selectedQuarter === 3 ? [7, 8, 9]
+                                                : [10, 11, 12]
+
+                                    // Calculate budget and actual based on selectedMonth
+                                    let budgetTotal: number
+                                    let actualTotal: number
+
+                                    if (selectedMonth === null) {
+                                        // All months - use quarter totals
+                                        budgetTotal = row?.qTotal || 0
+                                        actualTotal = quarterMonths.reduce((sum, m) => sum + (categoryActuals[m] || 0), 0)
+                                    } else {
+                                        // Specific month selected
+                                        const monthBudgets = [row?.month1Budget || 0, row?.month2Budget || 0, row?.month3Budget || 0]
+                                        budgetTotal = monthBudgets[selectedMonth - 1]
+                                        actualTotal = categoryActuals[quarterMonths[selectedMonth - 1]] || 0
+                                    }
+
+                                    return {
+                                        month1: row?.month1Budget || 0,
+                                        month2: row?.month2Budget || 0,
+                                        month3: row?.month3Budget || 0,
+                                        total: budgetTotal,
+                                        ref: row?.qRefTotal || 0,
+                                        actual: actualTotal,
+                                        remaining: budgetTotal - actualTotal
+                                    }
+                                }
+
+                                // Calculate totals for a category group
+                                const getGroupTotals = (subCategories: typeof editorHierarchy[0]['categoryGroups'][0]['subCategories']) => {
+                                    let month1 = 0, month2 = 0, month3 = 0, total = 0, ref = 0, actual = 0, remaining = 0
+                                    subCategories.forEach(sub => {
+                                        const vals = getMonthlyValues(sub.id)
+                                        month1 += vals.month1
+                                        month2 += vals.month2
+                                        month3 += vals.month3
+                                        total += vals.total
+                                        ref += vals.ref
+                                        actual += vals.actual
+                                        remaining += vals.remaining
+                                    })
+                                    return { month1, month2, month3, total, ref, actual, remaining }
+                                }
+
+                                // Calculate totals for a class
+                                const getClassTotals = (categoryGroups: typeof editorHierarchy[0]['categoryGroups']) => {
+                                    let month1 = 0, month2 = 0, month3 = 0, total = 0, ref = 0, actual = 0, remaining = 0
+                                    categoryGroups.forEach(group => {
+                                        const groupTotals = getGroupTotals(group.subCategories)
+                                        month1 += groupTotals.month1
+                                        month2 += groupTotals.month2
+                                        month3 += groupTotals.month3
+                                        total += groupTotals.total
+                                        ref += groupTotals.ref
+                                        actual += groupTotals.actual
+                                        remaining += groupTotals.remaining
+                                    })
+                                    return { month1, month2, month3, total, ref, actual, remaining }
+                                }
+
+                                // Calculate grand totals across all classes - separating income and expenses
+                                const getGrandTotals = () => {
+                                    let incomeTotal = 0, incomeActual = 0
+                                    let expenseTotal = 0, expenseActual = 0
+                                    let month1 = 0, month2 = 0, month3 = 0, ref = 0
+
+                                    editorHierarchy.forEach(cls => {
+                                        const classTotals = getClassTotals(cls.categoryGroups)
+                                        const isIncome = cls.code === 'REVENUE'
+
+                                        if (isIncome) {
+                                            incomeTotal += classTotals.total
+                                            incomeActual += classTotals.actual
+                                        } else {
+                                            expenseTotal += classTotals.total
+                                            expenseActual += classTotals.actual
+                                        }
+
+                                        month1 += classTotals.month1
+                                        month2 += classTotals.month2
+                                        month3 += classTotals.month3
+                                        ref += classTotals.ref
+                                    })
+
+                                    return {
+                                        incomeTotal, incomeActual,
+                                        expenseTotal, expenseActual,
+                                        netBudget: incomeTotal - expenseTotal,
+                                        netActual: incomeActual - expenseActual,
+                                        month1, month2, month3, ref
+                                    }
+                                }
+                                const grandTotals = getGrandTotals()
+
+                                return (
+                                    <>
+                                        {/* Header Summary Row - Income, Expenses, Net */}
+                                        <div className="px-4 py-3 bg-gradient-to-r from-zinc-100 to-zinc-50 dark:from-zinc-800 dark:to-zinc-800/50 border-b border-zinc-200 dark:border-zinc-700">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-sm font-medium text-muted-foreground">
+                                                    {selectedMonth ? monthNames[selectedMonth - 1] : `Q${selectedQuarter}`} Summary
+                                                </span>
+                                                <div className="flex items-center gap-6 text-sm">
+                                                    <div>
+                                                        <span className="text-muted-foreground mr-2">Income:</span>
+                                                        <span className="font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                                                            £{formatCurrency(grandTotals.incomeActual)}
+                                                            <span className="text-xs ml-1 opacity-70">/ £{formatCurrency(grandTotals.incomeTotal)}</span>
+                                                        </span>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-muted-foreground mr-2">Expenses:</span>
+                                                        <span className="font-bold tabular-nums text-red-600 dark:text-red-400">
+                                                            £{formatCurrency(grandTotals.expenseActual)}
+                                                            <span className="text-xs ml-1 opacity-70">/ £{formatCurrency(grandTotals.expenseTotal)}</span>
+                                                        </span>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-muted-foreground mr-2">Net:</span>
+                                                        <span className={`font-bold tabular-nums ${grandTotals.netActual >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                            £{formatCurrency(grandTotals.netActual)}
+                                                            <span className="text-xs ml-1 opacity-70">/ £{formatCurrency(grandTotals.netBudget)}</span>
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+
+                                        <div className={`grid ${showMonthlyBreakdown && selectedMonth === null ? 'grid-cols-[1fr_80px_70px_70px_70px_90px_90px_90px]' : 'grid-cols-[1fr_100px_100px_100px]'} gap-2 px-4 py-2 bg-zinc-50 dark:bg-zinc-800/50 text-xs font-semibold text-muted-foreground border-b border-zinc-200 dark:border-zinc-800`}>
+                                            <div>Category</div>
+                                            {showMonthlyBreakdown && selectedMonth === null && <div className="text-right">{year - 1} Ref</div>}
+                                            {showMonthlyBreakdown && selectedMonth === null && <div className="text-right">{monthNames[0]}</div>}
+                                            {showMonthlyBreakdown && selectedMonth === null && <div className="text-right">{monthNames[1]}</div>}
+                                            {showMonthlyBreakdown && selectedMonth === null && <div className="text-right">{monthNames[2]}</div>}
+                                            <div className="text-right">{selectedMonth ? monthNames[selectedMonth - 1] + ' Budget' : 'Budget'}</div>
+                                            <div className="text-right">{selectedMonth ? monthNames[selectedMonth - 1] + ' Actual' : 'Actual'}</div>
+                                            <div className="text-right">Remaining</div>
+                                        </div>
+
+                                        {/* Hierarchical Monthly Data Table */}
+                                        {isLoadingMonthly ? (
+                                            <div className="flex items-center justify-center py-12">
+                                                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                            </div>
+                                        ) : (
+                                            <div className="max-h-[500px] overflow-y-auto">
+                                                {editorHierarchy.map(cls => {
+                                                    const isClassExpanded = expandedEditorClasses.has(cls.id)
+                                                    const classTotals = getClassTotals(cls.categoryGroups)
+                                                    const isIncome = cls.code === 'REVENUE'
+
+                                                    return (
+                                                        <div key={cls.id} className="border-b border-zinc-200 dark:border-zinc-700">
+                                                            <button
+                                                                onClick={() => {
+                                                                    const newExpanded = new Set(expandedEditorClasses)
+                                                                    if (isClassExpanded) newExpanded.delete(cls.id)
+                                                                    else newExpanded.add(cls.id)
+                                                                    setExpandedEditorClasses(newExpanded)
+                                                                }}
+                                                                className={`w-full grid ${showMonthlyBreakdown && selectedMonth === null ? 'grid-cols-[1fr_80px_70px_70px_70px_90px_90px_90px]' : 'grid-cols-[1fr_100px_100px_100px]'} gap-2 px-4 py-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${isIncome ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : ''}`}
+                                                            >
+                                                                <div className="flex items-center gap-2 font-bold">
+                                                                    {isClassExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                                                                    {cls.name}
+                                                                    <span className="text-xs text-muted-foreground font-normal">({cls.categoryGroups.length})</span>
+                                                                </div>
+                                                                {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs text-muted-foreground tabular-nums">£{formatCurrency(classTotals.ref)}</div>}
+                                                                {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(classTotals.month1)}</div>}
+                                                                {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(classTotals.month2)}</div>}
+                                                                {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(classTotals.month3)}</div>}
+                                                                <div className="text-right text-xs tabular-nums font-bold">£{formatCurrency(classTotals.total)}</div>
+                                                                <div className="text-right text-xs tabular-nums font-semibold text-blue-600 dark:text-blue-400">£{formatCurrency(classTotals.actual)}</div>
+                                                                <div className={`text-right text-xs tabular-nums font-bold ${classTotals.remaining >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                                    £{formatCurrency(classTotals.remaining)}
+                                                                    <span className="ml-1 opacity-70">({classTotals.total > 0 ? Math.round((classTotals.remaining / classTotals.total) * 100) : 0}%)</span>
+                                                                </div>
+                                                            </button>
+
+                                                            {/* Category Groups */}
+                                                            {isClassExpanded && cls.categoryGroups.map(group => {
+                                                                const isGroupExpanded = expandedEditorGroups.has(group.id)
+                                                                const groupTotals = getGroupTotals(group.subCategories)
+
+                                                                return (
+                                                                    <div key={group.id}>
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                const newExpanded = new Set(expandedEditorGroups)
+                                                                                if (isGroupExpanded) newExpanded.delete(group.id)
+                                                                                else newExpanded.add(group.id)
+                                                                                setExpandedEditorGroups(newExpanded)
+                                                                            }}
+                                                                            className={`w-full grid ${showMonthlyBreakdown && selectedMonth === null ? 'grid-cols-[1fr_80px_70px_70px_70px_90px_90px_90px]' : 'grid-cols-[1fr_100px_100px_100px]'} gap-2 px-4 py-2 pl-8 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 border-t border-zinc-100 dark:border-zinc-800`}
+                                                                        >
+                                                                            <div className="flex items-center gap-2 font-medium text-sm">
+                                                                                {group.subCategories.length > 0 ? (
+                                                                                    isGroupExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
+                                                                                ) : <span className="w-3" />}
+                                                                                {group.name}
+                                                                                <span className="text-xs text-muted-foreground font-normal">({group.subCategories.length})</span>
+                                                                            </div>
+                                                                            {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs text-muted-foreground tabular-nums">£{formatCurrency(groupTotals.ref)}</div>}
+                                                                            {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs tabular-nums">£{formatCurrency(groupTotals.month1)}</div>}
+                                                                            {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs tabular-nums">£{formatCurrency(groupTotals.month2)}</div>}
+                                                                            {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs tabular-nums">£{formatCurrency(groupTotals.month3)}</div>}
+                                                                            <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(groupTotals.total)}</div>
+                                                                            <div className="text-right text-xs tabular-nums text-blue-600 dark:text-blue-400">£{formatCurrency(groupTotals.actual)}</div>
+                                                                            <div className={`text-right text-xs tabular-nums font-semibold ${groupTotals.remaining >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                                                £{formatCurrency(groupTotals.remaining)}
+                                                                                <span className="ml-1 opacity-70">({groupTotals.total > 0 ? Math.round((groupTotals.remaining / groupTotals.total) * 100) : 0}%)</span>
+                                                                            </div>
+                                                                        </button>
+
+                                                                        {/* Subcategories */}
+                                                                        {isGroupExpanded && group.subCategories.map(sub => {
+                                                                            const vals = getMonthlyValues(sub.id)
+
+                                                                            return (
+                                                                                <div
+                                                                                    key={sub.id}
+                                                                                    className={`grid ${showMonthlyBreakdown && selectedMonth === null ? 'grid-cols-[1fr_80px_70px_70px_70px_90px_90px_90px]' : 'grid-cols-[1fr_100px_100px_100px]'} gap-2 px-4 py-2 pl-14 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800`}
+                                                                                >
+                                                                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                                                        <span className="w-3" />
+                                                                                        {sub.name}
+                                                                                    </div>
+                                                                                    {showMonthlyBreakdown && selectedMonth === null && <div className="text-right text-xs text-muted-foreground tabular-nums">£{formatCurrency(vals.ref)}</div>}
+                                                                                    {/* Editable Month 1 */}
+                                                                                    {showMonthlyBreakdown && selectedMonth === null && (
+                                                                                        <div className="text-right text-xs tabular-nums relative" onClick={e => e.stopPropagation()}>
+                                                                                            {savingBudget === `${sub.id}-1` ? (
+                                                                                                <Loader2 className="h-3 w-3 animate-spin inline" />
+                                                                                            ) : editingCellId === `${sub.id}-m1` ? (
+                                                                                                <input
+                                                                                                    type="number"
+                                                                                                    autoFocus
+                                                                                                    className="w-16 h-5 px-1 text-right text-xs tabular-nums border border-blue-500 rounded bg-white dark:bg-zinc-800 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                                                                    value={editValue}
+                                                                                                    onChange={(e) => setEditValue(e.target.value)}
+                                                                                                    onKeyDown={(e) => {
+                                                                                                        if (e.key === 'Enter') {
+                                                                                                            handleMonthlyBudgetSave(sub.id, 1, parseFloat(editValue) || 0)
+                                                                                                        } else if (e.key === 'Escape') {
+                                                                                                            setEditingCellId(null)
+                                                                                                        }
+                                                                                                    }}
+                                                                                                    onBlur={() => handleMonthlyBudgetSave(sub.id, 1, parseFloat(editValue) || 0)}
+                                                                                                />
+                                                                                            ) : (
+                                                                                                <button
+                                                                                                    onClick={() => { setEditingCellId(`${sub.id}-m1`); setEditValue(vals.month1.toString()) }}
+                                                                                                    className="hover:bg-blue-100 dark:hover:bg-blue-900/30 px-1 py-0.5 rounded cursor-pointer"
+                                                                                                    title="Click to edit"
+                                                                                                >
+                                                                                                    £{formatCurrency(vals.month1)}
+                                                                                                </button>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    )}
+                                                                                    {/* Editable Month 2 */}
+                                                                                    {showMonthlyBreakdown && selectedMonth === null && (
+                                                                                        <div className="text-right text-xs tabular-nums relative" onClick={e => e.stopPropagation()}>
+                                                                                            {savingBudget === `${sub.id}-2` ? (
+                                                                                                <Loader2 className="h-3 w-3 animate-spin inline" />
+                                                                                            ) : editingCellId === `${sub.id}-m2` ? (
+                                                                                                <input
+                                                                                                    type="number"
+                                                                                                    autoFocus
+                                                                                                    className="w-16 h-5 px-1 text-right text-xs tabular-nums border border-blue-500 rounded bg-white dark:bg-zinc-800 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                                                                    value={editValue}
+                                                                                                    onChange={(e) => setEditValue(e.target.value)}
+                                                                                                    onKeyDown={(e) => {
+                                                                                                        if (e.key === 'Enter') {
+                                                                                                            handleMonthlyBudgetSave(sub.id, 2, parseFloat(editValue) || 0)
+                                                                                                        } else if (e.key === 'Escape') {
+                                                                                                            setEditingCellId(null)
+                                                                                                        }
+                                                                                                    }}
+                                                                                                    onBlur={() => handleMonthlyBudgetSave(sub.id, 2, parseFloat(editValue) || 0)}
+                                                                                                />
+                                                                                            ) : (
+                                                                                                <button
+                                                                                                    onClick={() => { setEditingCellId(`${sub.id}-m2`); setEditValue(vals.month2.toString()) }}
+                                                                                                    className="hover:bg-blue-100 dark:hover:bg-blue-900/30 px-1 py-0.5 rounded cursor-pointer"
+                                                                                                    title="Click to edit"
+                                                                                                >
+                                                                                                    £{formatCurrency(vals.month2)}
+                                                                                                </button>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    )}
+                                                                                    {/* Editable Month 3 */}
+                                                                                    {showMonthlyBreakdown && selectedMonth === null && (
+                                                                                        <div className="text-right text-xs tabular-nums relative" onClick={e => e.stopPropagation()}>
+                                                                                            {savingBudget === `${sub.id}-3` ? (
+                                                                                                <Loader2 className="h-3 w-3 animate-spin inline" />
+                                                                                            ) : editingCellId === `${sub.id}-m3` ? (
+                                                                                                <input
+                                                                                                    type="number"
+                                                                                                    autoFocus
+                                                                                                    className="w-16 h-5 px-1 text-right text-xs tabular-nums border border-blue-500 rounded bg-white dark:bg-zinc-800 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                                                                    value={editValue}
+                                                                                                    onChange={(e) => setEditValue(e.target.value)}
+                                                                                                    onKeyDown={(e) => {
+                                                                                                        if (e.key === 'Enter') {
+                                                                                                            handleMonthlyBudgetSave(sub.id, 3, parseFloat(editValue) || 0)
+                                                                                                        } else if (e.key === 'Escape') {
+                                                                                                            setEditingCellId(null)
+                                                                                                        }
+                                                                                                    }}
+                                                                                                    onBlur={() => handleMonthlyBudgetSave(sub.id, 3, parseFloat(editValue) || 0)}
+                                                                                                />
+                                                                                            ) : (
+                                                                                                <button
+                                                                                                    onClick={() => { setEditingCellId(`${sub.id}-m3`); setEditValue(vals.month3.toString()) }}
+                                                                                                    className="hover:bg-blue-100 dark:hover:bg-blue-900/30 px-1 py-0.5 rounded cursor-pointer"
+                                                                                                    title="Click to edit"
+                                                                                                >
+                                                                                                    £{formatCurrency(vals.month3)}
+                                                                                                </button>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    )}
+                                                                                    {/* Budget - Editable when month is selected */}
+                                                                                    <div className="text-right text-xs tabular-nums font-medium" onClick={e => e.stopPropagation()}>
+                                                                                        {selectedMonth !== null ? (
+                                                                                            // Single month view - make Budget editable
+                                                                                            savingBudget === `${sub.id}-${selectedMonth}` ? (
+                                                                                                <Loader2 className="h-3 w-3 animate-spin inline" />
+                                                                                            ) : editingCellId === `${sub.id}-budget` ? (
+                                                                                                <input
+                                                                                                    type="number"
+                                                                                                    autoFocus
+                                                                                                    className="w-20 h-5 px-1 text-right text-xs tabular-nums border border-blue-500 rounded bg-white dark:bg-zinc-800 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                                                                    value={editValue}
+                                                                                                    onChange={(e) => setEditValue(e.target.value)}
+                                                                                                    onKeyDown={(e) => {
+                                                                                                        if (e.key === 'Enter') {
+                                                                                                            handleMonthlyBudgetSave(sub.id, selectedMonth, parseFloat(editValue) || 0)
+                                                                                                        } else if (e.key === 'Escape') {
+                                                                                                            setEditingCellId(null)
+                                                                                                        }
+                                                                                                    }}
+                                                                                                    onBlur={() => handleMonthlyBudgetSave(sub.id, selectedMonth, parseFloat(editValue) || 0)}
+                                                                                                />
+                                                                                            ) : (
+                                                                                                <button
+                                                                                                    onClick={() => { setEditingCellId(`${sub.id}-budget`); setEditValue(vals.total.toString()) }}
+                                                                                                    className="hover:bg-blue-100 dark:hover:bg-blue-900/30 px-1 py-0.5 rounded cursor-pointer"
+                                                                                                    title="Click to edit"
+                                                                                                >
+                                                                                                    £{formatCurrency(vals.total)}
+                                                                                                </button>
+                                                                                            )
+                                                                                        ) : (
+                                                                                            // Quarter view - just display total
+                                                                                            <>£{formatCurrency(vals.total)}</>
+                                                                                        )}
+                                                                                    </div>
+                                                                                    <div className="text-right text-xs tabular-nums text-blue-600 dark:text-blue-400">£{formatCurrency(vals.actual)}</div>
+                                                                                    <div className={`text-right text-xs tabular-nums font-medium ${vals.remaining >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                                                        £{formatCurrency(vals.remaining)}
+                                                                                        <span className="ml-1 opacity-70">({vals.total > 0 ? Math.round((vals.remaining / vals.total) * 100) : 0}%)</span>
+                                                                                    </div>
+                                                                                </div>
+                                                                            )
+                                                                        })}
+                                                                    </div>
+                                                                )
+                                                            })}
+                                                        </div>
+
+                                                )
+                                            })}
+                                            </div>
+                                        )}
+                                    </>
+                                )
+                            })()}
+
+
+                    {/* Lock Quarter Button */}
+                    <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+                        <div className="text-sm text-muted-foreground">
+                            Ready to track actuals for Q{selectedQuarter}?
+                        </div>
+                        {!getQuarterLockSelected(selectedQuarter) ? (
+                            <Button
+                                onClick={() => handleLockQuarter(selectedQuarter)}
+                                className="bg-emerald-600 hover:bg-emerald-700"
+                            >
+                                <Lock className="h-4 w-4 mr-2" /> Lock Q{selectedQuarter} & Start Tracking
+                            </Button>
+                        ) : (
+                            <span className="text-emerald-600 text-sm flex items-center gap-1">
+                                <Lock className="h-4 w-4" /> Q{selectedQuarter} is locked
+                            </span>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* TAB 3: TRACKING (Budget vs Actual) */}
+            {activeTab === 'tracking' && hasLockedQuarters && (
+            <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-bold">Budget vs Actual</h2>
+                        <p className="text-sm text-muted-foreground">Tracking locked quarters for {activeScenario?.name}</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={fetchBvaData}>
+                        <RefreshCcw className="h-4 w-4 mr-2" /> Refresh
+                    </Button>
+                </div>
+
+                {/* Locked quarters indicator */}
+                <div className="flex gap-2">
+                    {([1, 2, 3, 4] as const).map(q => {
+                        const isLocked = getQuarterLock(q)
+                        return (
+                            <div
+                                key={q}
+                                className={`px-3 py-1 rounded text-xs font-bold ${isLocked
+                                    ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'
+                                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400'
+                                    }`}
+                            >
+                                Q{q} {isLocked ? '✓ Tracking' : '○ Draft'}
+                            </div>
+                        )
+                    })}
+                </div>
+
+                {/* BvA Table (reusing existing logic) */}
+                <Card>
+                    <CardContent className="pt-6">
+                        {bvaData.length === 0 ? (
+                            <p className="text-center text-muted-foreground py-8">No budget data. Set up your budget in the Editor tab first.</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {bvaData.map(cls => {
+                                    const isClassExpanded = expandedClasses.has(cls.classId)
+                                    const isIncome = cls.classCode === 'REVENUE'
+                                    const varianceIsGood = isIncome ? cls.totalVariance >= 0 : cls.totalVariance <= 0
+
+                                    return (
+                                        <div key={cls.classId} className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+                                            <button
+                                                onClick={() => toggleClass(cls.classId)}
+                                                className={`w-full flex items-center justify-between p-3 text-left ${isIncome ? 'bg-emerald-50 dark:bg-emerald-950/30' : 'bg-zinc-50 dark:bg-zinc-900'}`}
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    {isClassExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                                                    <span className="font-bold">{cls.className}</span>
+                                                    <span className="text-xs text-muted-foreground">({cls.categoryGroups.length} groups)</span>
+                                                </div>
+                                                <div className="flex gap-6 text-sm tabular-nums">
+                                                    <span className="w-28 text-right">£{formatCurrency(cls.totalBudgeted)}</span>
+                                                    <span className="w-28 text-right">£{formatCurrency(cls.totalActual)}</span>
+                                                    <span className={`w-28 text-right ${varianceIsGood ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                        {cls.totalVariance >= 0 ? '+' : ''}£{formatCurrency(cls.totalVariance)}
+                                                    </span>
+                                                </div>
+                                            </button>
+
+                                            {isClassExpanded && (
+                                                <div className="border-t border-zinc-200 dark:border-zinc-800">
+                                                    {cls.categoryGroups.map(group => {
+                                                        const isGroupExpanded = expandedGroups.has(group.categoryId)
+                                                        const groupVarianceGood = isIncome ? group.totalVariance >= 0 : group.totalVariance <= 0
+
+                                                        return (
+                                                            <div key={group.categoryId} className="border-b border-zinc-100 dark:border-zinc-800 last:border-b-0">
+                                                                <button
+                                                                    onClick={() => toggleGroup(group.categoryId)}
+                                                                    className="w-full flex items-center justify-between p-2 pl-6 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
+                                                                >
+                                                                    <div className="flex items-center gap-2">
+                                                                        {isGroupExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                                                        <span className="font-semibold text-sm">{group.categoryName}</span>
+                                                                        {group.subCategories.length > 0 && (
+                                                                            <span className="text-xs text-muted-foreground">({group.subCategories.length})</span>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="flex gap-6 text-sm tabular-nums">
+                                                                        <span className="w-28 text-right">£{formatCurrency(group.totalBudgeted)}</span>
+                                                                        <span className="w-28 text-right">£{formatCurrency(group.totalActual)}</span>
+                                                                        <span className={`w-28 text-right flex items-center justify-end gap-1 ${groupVarianceGood ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                                            {group.totalVariance >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                                                                            £{formatCurrency(Math.abs(group.totalVariance))}
+                                                                        </span>
+                                                                    </div>
+                                                                </button>
+
+                                                                {isGroupExpanded && group.subCategories.length > 0 && (
+                                                                    <div className="bg-zinc-50/50 dark:bg-zinc-950/50">
+                                                                        {group.subCategories.map(sub => (
+                                                                            <div key={sub.categoryId} className="flex items-center justify-between p-2 pl-12 text-left hover:bg-zinc-100 dark:hover:bg-zinc-900">
+                                                                                <span className="text-sm text-muted-foreground">{sub.categoryName}</span>
+                                                                                <div className="flex gap-6 text-sm tabular-nums">
+                                                                                    <span className="w-28 text-right text-muted-foreground">£{formatCurrency(sub.budgeted)}</span>
+                                                                                    <span className="w-28 text-right text-muted-foreground">£{formatCurrency(sub.actual)}</span>
+                                                                                    <span className={`w-28 text-right ${(isIncome ? sub.variance >= 0 : sub.variance <= 0) ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                                                        £{formatCurrency(Math.abs(sub.variance))}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+        )}
+    {/* Message for Tracking tab when no locked quarters */}
+    {activeTab === 'tracking' && !hasLockedQuarters && activeScenario && (
+            <Card>
+                <CardContent className="py-12 text-center">
+                    <Lock className="h-8 w-8 mx-auto mb-4 text-muted-foreground" />
+                    <p className="text-muted-foreground">Lock at least one quarter in the Editor tab to start tracking actuals.</p>
+                </CardContent>
+            </Card>
+        )}
+
+    {/* Message when no scenarios exist */}
+    {scenarios.length === 0 && activeTab !== 'scenarios' && (
+            <Card>
+                <CardContent className="py-12 text-center">
+                    <p className="text-muted-foreground">Create a scenario in the Scenarios tab to get started.</p>
+                </CardContent>
+            </Card>
+        )}
+        </div>
+    )
+}

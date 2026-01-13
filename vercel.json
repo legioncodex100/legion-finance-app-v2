@@ -1,0 +1,8 @@
+{
+    "crons": [
+        {
+            "path": "/api/cron/mindbody-sync",
+            "schedule": "0 3 * * *"
+        }
+    ]
+}
