@@ -20,7 +20,7 @@ export function QuarterLockGrid({
                 <span className="text-sm font-semibold">Quarterly Commitments</span>
                 <span className="text-xs text-muted-foreground">Lock quarters when ready to track actuals</span>
             </div>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {([1, 2, 3, 4] as const).map(q => {
                     const isLocked = getQuarterLock(q)
                     return (

@@ -1095,3 +1095,43 @@ const protectedPaths = [
 > 
 > After adding env vars in Vercel dashboard, you MUST redeploy for them to take effect.
 > Use the debug endpoint pattern to verify: `GET /api/debug-env` returns env status.
+
+---
+
+### [2026-01-13] UI Cleanup & Refactoring
+- **Semantic Tokens**: Implemented `success`, `warning`, `info`, `danger` in `globals.css` (OKLCH color space).
+- **Budget Refactor**:
+  - Unified `MonthlyBudgetEditor.tsx` logic, removing ~130 lines of duplicated code for Month vs Quarter views.
+  - Implemented CSS variables `--grid-budget-quarter` and `--grid-budget-month` to remove magic strings.
+- **Component Extraction**:
+  - Created reusable `<StatCard>` component.
+  - Replaced repetitive card markup in `(dashboard)/page.tsx` and `transactions/page.tsx` with `<StatCard>`.
+  - Standardized dashboard colors to use the new semantic tokens.
+
+> [!FIX]
+> **Tailwind Layout Fix**: The table layout in default/yearly views was broken due to Tailwind arbitrary values not compiling/applying correctly. Replaced with valid React inline styles `style={{ gridTemplateColumns: ... }}` to guarantee layout consistency across both Monthly and Yearly tables.
+
+> [!FIX]
+> **Variance Styling**: Updated Variance column to use explicit `text-emerald-500` (+) and `text-rose-500` (-) colors based on user request ("nice red"). Added `pr-4` right padding to align numbers away from the edge.
+
+> [!UI_TWEAK]
+> **Typography Hierarchy**: Increased font size of main budget categories (Classes) to `text-base` (from `text-sm`) to improve visual hierarchy.
+
+---
+
+### [2026-01-13] Mobile Polish & Table Standardization
+
+#### Mobile Optimization
+- **Responsive Header**: Refactored `BudgetEditorTab` header to stack vertically on mobile, resolving text overlap issues.
+- **Grid Density**: Adjusted "Quarterly Commitments" grid from 4-columns to 2-columns on mobile for better touch targets.
+- **Flex Wrapping**: Added `flex-wrap` to Month Selectors to prevent overflow on small screens.
+
+#### Table UI Standardization
+- **Unified Backgrounds**: Migrated Budget tables from mixed Zinc backgrounds to global `bg-card` (Pure Black).
+- **Sticky Column Matching**: Enforced solid `bg-card` on sticky columns to perfectly match the row background, eliminating "striping" caused by transparent `bg-muted/50`.
+- **Seamless Aesthetic**: Both Yearly and Monthly views now share identical container styling, removing visual disconnects.
+
+#### Key Files Modified
+- `src/app/(dashboard)/budget/components/BudgetEditorTab.tsx`
+- `src/app/(dashboard)/budget/components/CategoryHierarchyTable.tsx`
+- `src/app/(dashboard)/budget/components/MonthlyBudgetEditor.tsx`

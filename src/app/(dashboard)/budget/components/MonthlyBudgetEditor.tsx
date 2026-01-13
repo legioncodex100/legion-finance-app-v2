@@ -173,20 +173,85 @@ export function MonthlyBudgetEditor({ scenarioId, year, yearlyConfirmed }: Month
 
     // Variance display with color coding
     const VarianceCell = ({ variance, isIncome }: { variance: number, isIncome: boolean }) => {
-        // For expenses: positive variance (under budget) is good
-        // For income: positive variance (over target) is good
-        const isGood = isIncome ? variance >= 0 : variance >= 0
         return (
-            <span className={`tabular-nums ${isGood ? 'text-emerald-600' : 'text-red-600'}`}>
+            <span className={`tabular-nums ${variance >= 0 ? 'text-success' : 'text-destructive'}`}>
                 {variance >= 0 ? '+' : ''}£{formatCurrency(Math.abs(variance))}
             </span>
         )
     }
 
+    // Unified Row Renderer
+    const BudgetRow = ({
+        label,
+        depth = 0,
+        isExpanded,
+        onExpand,
+        hasChildren,
+        isIncome,
+        renderCells
+    }: {
+        label: React.ReactNode,
+        depth?: number,
+        isExpanded?: boolean,
+        onExpand?: () => void,
+        hasChildren?: boolean,
+        isIncome?: boolean,
+        renderCells: () => React.ReactNode
+    }) => {
+        const paddingLeft = depth === 0 ? 'px-4' : depth === 1 ? 'pl-8' : 'pl-14'
+        const bgClass = depth === 0
+            ? 'bg-card hover:bg-muted/50'
+            : 'hover:bg-muted/30'
+
+        const stickyBg = depth === 0
+            ? 'bg-card group-hover:bg-muted/50'
+            : 'bg-card group-hover:bg-muted/30'
+
+        // Use inline styles to ensure grid works regardless of Tailwind parsing
+        const gridTemplate = selectedMonth === null
+            ? '1fr 80px 80px 80px 100px'
+            : '1fr 100px 100px 100px'
+
+        const textSize = depth === 0 ? 'text-base' : 'text-sm'
+
+        const content = (
+            <>
+                <div className={`flex items-center gap-2 font-medium ${textSize} sticky left-0 z-10 ${stickyBg} pr-2 transition-colors`}>
+                    {hasChildren ? (
+                        isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />
+                    ) : <span className="w-3.5" />}
+                    {label}
+                </div>
+                {renderCells()}
+            </>
+        )
+
+        if (onExpand) {
+            return (
+                <button
+                    onClick={onExpand}
+                    className={`w-full grid gap-2 ${paddingLeft} py-3 text-left border-b border-border last:border-b-0 transition-colors group ${bgClass} min-w-[600px]`}
+                    style={{ gridTemplateColumns: gridTemplate }}
+                >
+                    {content}
+                </button>
+            )
+        }
+
+        return (
+            <div
+                className={`grid gap-2 ${paddingLeft} py-2 border-b border-border last:border-b-0 group ${bgClass} min-w-[600px]`}
+                style={{ gridTemplateColumns: gridTemplate }}
+            >
+                {content}
+            </div>
+        )
+    }
+
     return (
-        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
             {/* Header */}
-            <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+            <div className="p-4 border-b border-border flex items-center justify-between">
                 <div>
                     <h3 className="font-bold">Q{selectedQuarter} Monthly Budget</h3>
                     <p className="text-xs text-muted-foreground">
@@ -199,8 +264,8 @@ export function MonthlyBudgetEditor({ scenarioId, year, yearlyConfirmed }: Month
                             key={q}
                             onClick={() => { setSelectedQuarter(q); setSelectedMonth(null) }}
                             className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${selectedQuarter === q
-                                ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
-                                : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
+                                ? 'bg-foreground text-background'
+                                : 'bg-muted text-muted-foreground hover:text-foreground'
                                 }`}
                         >
                             Q{q}
@@ -213,13 +278,13 @@ export function MonthlyBudgetEditor({ scenarioId, year, yearlyConfirmed }: Month
             </div>
 
             {/* Month Selector Row */}
-            <div className="px-4 py-2 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
-                <div className="flex items-center gap-2">
+            <div className="px-4 py-2 border-b border-border bg-muted/50">
+                <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs text-muted-foreground mr-2">View:</span>
                     <button
                         onClick={() => setSelectedMonth(null)}
                         className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedMonth === null
-                            ? 'bg-blue-600 text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'}`}
+                            ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'}`}
                     >
                         All Q{selectedQuarter}
                     </button>
@@ -228,7 +293,7 @@ export function MonthlyBudgetEditor({ scenarioId, year, yearlyConfirmed }: Month
                             key={m}
                             onClick={() => setSelectedMonth(m)}
                             className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedMonth === m
-                                ? 'bg-blue-600 text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'}`}
+                                ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'}`}
                         >
                             {monthNames[m - 1]}
                         </button>
@@ -236,210 +301,170 @@ export function MonthlyBudgetEditor({ scenarioId, year, yearlyConfirmed }: Month
                 </div>
             </div>
 
-            {/* Table Header - changes based on view */}
-            {selectedMonth === null ? (
-                // Quarter view header
-                <div className="grid grid-cols-[1fr_80px_80px_80px_100px] gap-2 px-4 py-2 bg-zinc-50 dark:bg-zinc-800/50 text-xs font-semibold text-muted-foreground border-b border-zinc-200 dark:border-zinc-800">
-                    <div>Category</div>
-                    <div className="text-right">{monthNames[0]}</div>
-                    <div className="text-right">{monthNames[1]}</div>
-                    <div className="text-right">{monthNames[2]}</div>
-                    <div className="text-right">Q{selectedQuarter} Total</div>
+            {/* Table Header */}
+            <div className="overflow-x-auto">
+                <div
+                    className="grid gap-2 px-4 py-2 bg-card text-xs font-semibold text-muted-foreground border-b border-border min-w-[600px]"
+                    style={{ gridTemplateColumns: selectedMonth === null ? '1fr 80px 80px 80px 100px' : '1fr 100px 100px 100px' }}
+                >
+                    <div className="sticky left-0 z-10 bg-card">Category</div>
+                    {selectedMonth === null ? (
+                        <>
+                            <div className="text-right">{monthNames[0]}</div>
+                            <div className="text-right">{monthNames[1]}</div>
+                            <div className="text-right">{monthNames[2]}</div>
+                            <div className="text-right">Q{selectedQuarter} Total</div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="text-right">Budget</div>
+                            <div className="text-right">Actual</div>
+                            <div className="text-right pr-4">Variance</div>
+                        </>
+                    )}
                 </div>
-            ) : (
-                // Single month view header
-                <div className="grid grid-cols-[1fr_100px_100px_100px] gap-2 px-4 py-2 bg-zinc-50 dark:bg-zinc-800/50 text-xs font-semibold text-muted-foreground border-b border-zinc-200 dark:border-zinc-800">
-                    <div>Category</div>
-                    <div className="text-right">Budget</div>
-                    <div className="text-right">Actual</div>
-                    <div className="text-right">Variance</div>
-                </div>
-            )}
 
-            {isLoading ? (
-                <div className="flex items-center justify-center py-12">
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-            ) : (
-                <div className="max-h-[500px] overflow-y-auto">
-                    {editorHierarchy.map(cls => {
-                        const isExpanded = expandedClasses.has(cls.id)
-                        const isIncome = cls.code === 'REVENUE'
+                {isLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                ) : (
+                    <div className="max-h-[500px] overflow-y-auto overflow-x-auto">
+                        {editorHierarchy.map(cls => {
+                            const isExpanded = expandedClasses.has(cls.id)
+                            const isIncome = cls.code === 'REVENUE'
 
-                        return (
-                            <div key={cls.id} className="border-b border-zinc-200 dark:border-zinc-700 last:border-b-0">
-                                {/* Class Row */}
-                                {selectedMonth === null ? (
-                                    // Quarter view - class row
-                                    <button
-                                        onClick={() => {
+                            return (
+                                <div key={cls.id} className="border-b border-border last:border-b-0 min-w-[600px]">
+                                    {/* Class Row */}
+                                    <BudgetRow
+                                        label={cls.name}
+                                        depth={0}
+                                        isExpanded={isExpanded}
+                                        onExpand={() => {
                                             const set = new Set(expandedClasses)
                                             isExpanded ? set.delete(cls.id) : set.add(cls.id)
                                             setExpandedClasses(set)
                                         }}
-                                        className={`w-full grid grid-cols-[1fr_80px_80px_80px_100px] gap-2 px-4 py-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${isIncome ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : ''}`}
-                                    >
-                                        <div className="flex items-center gap-2 font-bold">
-                                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                                            {cls.name}
-                                        </div>
-                                        {(() => {
-                                            const totals = getClassTotals(cls.categoryGroups)
-                                            return (
-                                                <>
-                                                    <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(totals.m1Budget)}</div>
-                                                    <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(totals.m2Budget)}</div>
-                                                    <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(totals.m3Budget)}</div>
-                                                    <div className="text-right text-xs tabular-nums font-bold">£{formatCurrency(totals.qTotal)}</div>
-                                                </>
-                                            )
-                                        })()}
-                                    </button>
-                                ) : (
-                                    // Single month view - class row
-                                    <button
-                                        onClick={() => {
-                                            const set = new Set(expandedClasses)
-                                            isExpanded ? set.delete(cls.id) : set.add(cls.id)
-                                            setExpandedClasses(set)
+                                        hasChildren={true}
+                                        isIncome={isIncome}
+                                        renderCells={() => {
+                                            if (selectedMonth === null) {
+                                                const totals = getClassTotals(cls.categoryGroups)
+                                                return (
+                                                    <>
+                                                        <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(totals.m1Budget)}</div>
+                                                        <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(totals.m2Budget)}</div>
+                                                        <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(totals.m3Budget)}</div>
+                                                        <div className="text-right text-xs tabular-nums font-bold">£{formatCurrency(totals.qTotal)}</div>
+                                                    </>
+                                                )
+                                            } else {
+                                                const totals = getClassMonthTotals(cls.categoryGroups, selectedMonth)
+                                                return (
+                                                    <>
+                                                        <div className="text-right text-xs tabular-nums font-bold">£{formatCurrency(totals.budget)}</div>
+                                                        <div className="text-right text-xs tabular-nums font-semibold text-info">£{formatCurrency(totals.actual)}</div>
+                                                        <div className="text-right text-xs font-bold pr-4"><VarianceCell variance={totals.variance} isIncome={isIncome} /></div>
+                                                    </>
+                                                )
+                                            }
                                         }}
-                                        className={`w-full grid grid-cols-[1fr_100px_100px_100px] gap-2 px-4 py-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${isIncome ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : ''}`}
-                                    >
-                                        <div className="flex items-center gap-2 font-bold">
-                                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                                            {cls.name}
-                                        </div>
-                                        {(() => {
-                                            const totals = getClassMonthTotals(cls.categoryGroups, selectedMonth)
-                                            return (
-                                                <>
-                                                    <div className="text-right text-xs tabular-nums font-bold">£{formatCurrency(totals.budget)}</div>
-                                                    <div className="text-right text-xs tabular-nums font-semibold text-blue-600">£{formatCurrency(totals.actual)}</div>
-                                                    <div className="text-right text-xs font-bold"><VarianceCell variance={totals.variance} isIncome={isIncome} /></div>
-                                                </>
-                                            )
-                                        })()}
-                                    </button>
-                                )}
+                                    />
 
-                                {/* Groups */}
-                                {isExpanded && cls.categoryGroups.map(group => {
-                                    const isGroupExpanded = expandedGroups.has(group.id)
+                                    {/* Groups */}
+                                    {isExpanded && cls.categoryGroups.map(group => {
+                                        const isGroupExpanded = expandedGroups.has(group.id)
 
-                                    return (
-                                        <div key={group.id}>
-                                            {selectedMonth === null ? (
-                                                // Quarter view - group row
-                                                <button
-                                                    onClick={() => {
+                                        return (
+                                            <div key={group.id}>
+                                                <BudgetRow
+                                                    label={group.name}
+                                                    depth={1}
+                                                    isExpanded={isGroupExpanded}
+                                                    onExpand={() => {
                                                         const set = new Set(expandedGroups)
                                                         isGroupExpanded ? set.delete(group.id) : set.add(group.id)
                                                         setExpandedGroups(set)
                                                     }}
-                                                    className="w-full grid grid-cols-[1fr_80px_80px_80px_100px] gap-2 px-4 py-2 pl-8 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 border-t border-zinc-100 dark:border-zinc-800"
-                                                >
-                                                    <div className="flex items-center gap-2 font-medium text-sm">
-                                                        {group.subCategories.length > 0 ? (
-                                                            isGroupExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
-                                                        ) : <span className="w-3" />}
-                                                        {group.name}
-                                                    </div>
-                                                    {(() => {
-                                                        const gTotals = getGroupTotals(group.subCategories)
-                                                        return (
-                                                            <>
-                                                                <div className="text-right text-xs tabular-nums">£{formatCurrency(gTotals.m1Budget)}</div>
-                                                                <div className="text-right text-xs tabular-nums">£{formatCurrency(gTotals.m2Budget)}</div>
-                                                                <div className="text-right text-xs tabular-nums">£{formatCurrency(gTotals.m3Budget)}</div>
-                                                                <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(gTotals.qTotal)}</div>
-                                                            </>
-                                                        )
-                                                    })()}
-                                                </button>
-                                            ) : (
-                                                // Single month view - group row
-                                                <button
-                                                    onClick={() => {
-                                                        const set = new Set(expandedGroups)
-                                                        isGroupExpanded ? set.delete(group.id) : set.add(group.id)
-                                                        setExpandedGroups(set)
+                                                    hasChildren={group.subCategories.length > 0}
+                                                    renderCells={() => {
+                                                        if (selectedMonth === null) {
+                                                            const gTotals = getGroupTotals(group.subCategories)
+                                                            return (
+                                                                <>
+                                                                    <div className="text-right text-xs tabular-nums">£{formatCurrency(gTotals.m1Budget)}</div>
+                                                                    <div className="text-right text-xs tabular-nums">£{formatCurrency(gTotals.m2Budget)}</div>
+                                                                    <div className="text-right text-xs tabular-nums">£{formatCurrency(gTotals.m3Budget)}</div>
+                                                                    <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(gTotals.qTotal)}</div>
+                                                                </>
+                                                            )
+                                                        } else {
+                                                            const gTotals = getGroupMonthTotals(group.subCategories, selectedMonth)
+                                                            return (
+                                                                <>
+                                                                    <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(gTotals.budget)}</div>
+                                                                    <div className="text-right text-xs tabular-nums text-info">£{formatCurrency(gTotals.actual)}</div>
+                                                                    <div className="text-right text-xs font-semibold pr-4"><VarianceCell variance={gTotals.variance} isIncome={isIncome} /></div>
+                                                                </>
+                                                            )
+                                                        }
                                                     }}
-                                                    className="w-full grid grid-cols-[1fr_100px_100px_100px] gap-2 px-4 py-2 pl-8 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 border-t border-zinc-100 dark:border-zinc-800"
-                                                >
-                                                    <div className="flex items-center gap-2 font-medium text-sm">
-                                                        {group.subCategories.length > 0 ? (
-                                                            isGroupExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
-                                                        ) : <span className="w-3" />}
-                                                        {group.name}
-                                                    </div>
-                                                    {(() => {
-                                                        const gTotals = getGroupMonthTotals(group.subCategories, selectedMonth)
-                                                        return (
-                                                            <>
-                                                                <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(gTotals.budget)}</div>
-                                                                <div className="text-right text-xs tabular-nums text-blue-600">£{formatCurrency(gTotals.actual)}</div>
-                                                                <div className="text-right text-xs font-semibold"><VarianceCell variance={gTotals.variance} isIncome={isIncome} /></div>
-                                                            </>
-                                                        )
-                                                    })()}
-                                                </button>
-                                            )}
+                                                />
 
-                                            {/* Subcategories */}
-                                            {isGroupExpanded && group.subCategories.map(sub => {
-                                                if (selectedMonth === null) {
-                                                    // Quarter view
-                                                    const vals = getMonthlyValues(sub.id)
+                                                {/* Subcategories */}
+                                                {isGroupExpanded && group.subCategories.map(sub => {
                                                     return (
-                                                        <div
+                                                        <BudgetRow
                                                             key={sub.id}
-                                                            className="grid grid-cols-[1fr_80px_80px_80px_100px] gap-2 px-4 py-2 pl-14 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800"
-                                                        >
-                                                            <div className="text-sm text-muted-foreground">{sub.name}</div>
-                                                            <div className="text-right text-xs" onClick={e => e.stopPropagation()}>
-                                                                <EditableBudgetCell categoryId={sub.id} monthInQuarter={1} value={vals.m1Budget} />
-                                                            </div>
-                                                            <div className="text-right text-xs" onClick={e => e.stopPropagation()}>
-                                                                <EditableBudgetCell categoryId={sub.id} monthInQuarter={2} value={vals.m2Budget} />
-                                                            </div>
-                                                            <div className="text-right text-xs" onClick={e => e.stopPropagation()}>
-                                                                <EditableBudgetCell categoryId={sub.id} monthInQuarter={3} value={vals.m3Budget} />
-                                                            </div>
-                                                            <div className="text-right text-xs tabular-nums font-medium">
-                                                                £{formatCurrency(vals.qTotal)}
-                                                            </div>
-                                                        </div>
+                                                            label={<span className="text-muted-foreground">{sub.name}</span>}
+                                                            depth={2}
+                                                            renderCells={() => {
+                                                                if (selectedMonth === null) {
+                                                                    const vals = getMonthlyValues(sub.id)
+                                                                    return (
+                                                                        <>
+                                                                            <div className="text-right text-xs" onClick={e => e.stopPropagation()}>
+                                                                                <EditableBudgetCell categoryId={sub.id} monthInQuarter={1} value={vals.m1Budget} />
+                                                                            </div>
+                                                                            <div className="text-right text-xs" onClick={e => e.stopPropagation()}>
+                                                                                <EditableBudgetCell categoryId={sub.id} monthInQuarter={2} value={vals.m2Budget} />
+                                                                            </div>
+                                                                            <div className="text-right text-xs" onClick={e => e.stopPropagation()}>
+                                                                                <EditableBudgetCell categoryId={sub.id} monthInQuarter={3} value={vals.m3Budget} />
+                                                                            </div>
+                                                                            <div className="text-right text-xs tabular-nums font-medium">£{formatCurrency(vals.qTotal)}</div>
+                                                                        </>
+                                                                    )
+                                                                } else {
+                                                                    const vals = getSingleMonthValues(sub.id, selectedMonth)
+                                                                    return (
+                                                                        <>
+                                                                            <div className="text-right text-xs" onClick={e => e.stopPropagation()}>
+                                                                                <EditableBudgetCell categoryId={sub.id} monthInQuarter={selectedMonth} value={vals.budget} />
+                                                                            </div>
+                                                                            <div className="text-right text-xs tabular-nums text-info">
+                                                                                £{formatCurrency(vals.actual)}
+                                                                            </div>
+                                                                            <div className="text-right text-xs pr-4">
+                                                                                <VarianceCell variance={vals.variance} isIncome={isIncome} />
+                                                                            </div>
+                                                                        </>
+                                                                    )
+                                                                }
+                                                            }}
+                                                        />
                                                     )
-                                                } else {
-                                                    // Single month view
-                                                    const vals = getSingleMonthValues(sub.id, selectedMonth)
-                                                    return (
-                                                        <div
-                                                            key={sub.id}
-                                                            className="grid grid-cols-[1fr_100px_100px_100px] gap-2 px-4 py-2 pl-14 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800"
-                                                        >
-                                                            <div className="text-sm text-muted-foreground">{sub.name}</div>
-                                                            <div className="text-right text-xs" onClick={e => e.stopPropagation()}>
-                                                                <EditableBudgetCell categoryId={sub.id} monthInQuarter={selectedMonth} value={vals.budget} />
-                                                            </div>
-                                                            <div className="text-right text-xs tabular-nums text-blue-600">
-                                                                £{formatCurrency(vals.actual)}
-                                                            </div>
-                                                            <div className="text-right text-xs">
-                                                                <VarianceCell variance={vals.variance} isIncome={isIncome} />
-                                                            </div>
-                                                        </div>
-                                                    )
-                                                }
-                                            })}
-                                        </div>
-                                    )
-                                })}
-                            </div>
-                        )
-                    })}
-                </div>
-            )}
+                                                })}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+            </div>
         </div>
     )
 }

@@ -171,17 +171,22 @@ export function BudgetEditorTab({
     return (
         <div className="space-y-6">
             {/* Header */}
-            <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800">
-                <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-6">
-                        <div>
-                            <h2 className="text-lg font-bold">Budget Editor</h2>
-                            <p className="text-xs text-muted-foreground">Plan your {year} budget</p>
+            <div className="bg-card p-4 rounded-xl border border-border">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                    <div className="flex flex-col md:flex-row md:items-center gap-4 md:gap-6 w-full md:w-auto">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h2 className="text-lg font-bold">Budget Editor</h2>
+                                <p className="text-xs text-muted-foreground">Plan your {year} budget</p>
+                            </div>
+                            <Button variant="outline" size="sm" onClick={() => editorSubTab === 'yearly' ? fetchEditorData() : fetchMonthlyData()} className="md:hidden">
+                                <RefreshCcw className="h-4 w-4" />
+                            </Button>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">Scenario:</span>
+                        <div className="flex items-center gap-2 w-full md:w-auto">
+                            <span className="text-sm text-muted-foreground whitespace-nowrap">Scenario:</span>
                             {editingName ? (
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1 w-full">
                                     <input
                                         type="text"
                                         autoFocus
@@ -196,25 +201,26 @@ export function BudgetEditorTab({
                                                 setEditingName(false)
                                             }
                                         }}
-                                        className="h-9 px-3 rounded-lg border border-emerald-500 dark:bg-zinc-800 font-semibold text-sm w-48"
+                                        className="h-9 px-3 rounded-lg border border-input bg-transparent font-semibold text-sm w-full md:w-48"
                                     />
-                                    <button
+                                    <Button
+                                        size="icon"
+                                        className="h-9 w-9 shrink-0"
                                         onClick={async () => {
                                             await renameScenario(selectedScenario.id, nameValue)
                                             await onScenariosRefresh()
                                             setEditingName(false)
                                         }}
-                                        className="p-2 rounded bg-emerald-600 hover:bg-emerald-700 text-white"
                                     >
                                         <Check className="h-4 w-4" />
-                                    </button>
+                                    </Button>
                                 </div>
                             ) : (
-                                <>
+                                <div className="flex items-center gap-1 w-full">
                                     <select
                                         value={selectedScenario?.id || ''}
                                         onChange={e => onScenarioChange(e.target.value)}
-                                        className="h-9 px-3 pr-8 rounded-lg border border-zinc-300 dark:border-zinc-700 dark:bg-zinc-800 font-semibold text-sm"
+                                        className="h-9 px-3 pr-8 rounded-lg border border-zinc-300 dark:border-zinc-700 dark:bg-zinc-800 font-semibold text-sm w-full md:w-auto"
                                     >
                                         {scenarios.map(s => (
                                             <option key={s.id} value={s.id}>
@@ -224,15 +230,15 @@ export function BudgetEditorTab({
                                     </select>
                                     <button
                                         onClick={() => { setNameValue(selectedScenario?.name || ''); setEditingName(true) }}
-                                        className="p-2 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-muted-foreground hover:text-foreground"
+                                        className="p-2 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-muted-foreground hover:text-foreground shrink-0"
                                     >
                                         <Edit3 className="h-4 w-4" />
                                     </button>
-                                </>
+                                </div>
                             )}
                         </div>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => editorSubTab === 'yearly' ? fetchEditorData() : fetchMonthlyData()}>
+                    <Button variant="outline" size="sm" onClick={() => editorSubTab === 'yearly' ? fetchEditorData() : fetchMonthlyData()} className="hidden md:flex">
                         <RefreshCcw className="h-4 w-4 mr-2" /> Refresh
                     </Button>
                 </div>
@@ -248,39 +254,43 @@ export function BudgetEditorTab({
                 />
 
                 {/* Sub-tab toggles */}
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => setEditorSubTab('yearly')}
-                        className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${editorSubTab === 'yearly'
-                            ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
-                            : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
-                            }`}
-                    >
-                        📅 Yearly
-                    </button>
-                    <button
-                        onClick={() => setEditorSubTab('monthly')}
-                        className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${editorSubTab === 'monthly'
-                            ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
-                            : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
-                            }`}
-                    >
-                        📆 Monthly
-                    </button>
-                    {!selectedScenario?.yearly_confirmed && editorSubTab === 'monthly' && (
-                        <span className="text-xs text-amber-600 ml-2">(View only - confirm yearly budget first)</span>
-                    )}
-                    {hasAnyLockedQuarter && (
-                        <span className="ml-auto flex items-center gap-1 text-xs text-amber-600">
-                            <Lock className="h-3 w-3" /> Yearly budget is locked
-                        </span>
-                    )}
+                <div className="flex flex-col md:flex-row md:items-center gap-3">
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setEditorSubTab('yearly')}
+                            className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${editorSubTab === 'yearly'
+                                ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
+                                : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
+                                }`}
+                        >
+                            📅 Yearly
+                        </button>
+                        <button
+                            onClick={() => setEditorSubTab('monthly')}
+                            className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${editorSubTab === 'monthly'
+                                ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
+                                : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
+                                }`}
+                        >
+                            📆 Monthly
+                        </button>
+                    </div>
+                    <div className="flex flex-col gap-1 md:flex-row md:items-center md:gap-3 md:ml-auto">
+                        {!selectedScenario?.yearly_confirmed && editorSubTab === 'monthly' && (
+                            <span className="text-xs text-amber-600">(View only - confirm yearly budget first)</span>
+                        )}
+                        {hasAnyLockedQuarter && (
+                            <span className="flex items-center gap-1 text-xs text-amber-600">
+                                <Lock className="h-3 w-3" /> Yearly budget is locked
+                            </span>
+                        )}
+                    </div>
                 </div>
             </div>
 
             {/* YEARLY VIEW */}
             {editorSubTab === 'yearly' && (
-                <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                <div className="bg-card p-5 rounded-xl border border-border">
                     <div className="flex items-center justify-between mb-4">
                         <div>
                             <h3 className="font-bold">Annual Budget Planning</h3>
@@ -289,13 +299,13 @@ export function BudgetEditorTab({
                         {!selectedScenario?.yearly_confirmed && !hasAnyLockedQuarter && (
                             <Button
                                 onClick={async () => { await confirmYearlyBudget(selectedScenario.id); onScenariosRefresh() }}
-                                className="bg-emerald-600 hover:bg-emerald-700"
+                                variant="default"
                             >
                                 <Check className="h-4 w-4 mr-2" /> Confirm Yearly & Unlock Monthly
                             </Button>
                         )}
                         {selectedScenario?.yearly_confirmed && !hasAnyLockedQuarter && (
-                            <span className="text-xs text-emerald-600 flex items-center gap-1">
+                            <span className="text-xs text-primary flex items-center gap-1 font-medium">
                                 <Check className="h-4 w-4" /> Yearly confirmed
                             </span>
                         )}
