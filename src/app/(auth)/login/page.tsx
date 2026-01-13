@@ -1,5 +1,8 @@
 "use client"
 
+// Force dynamic rendering - Supabase client needs env vars at runtime
+export const dynamic = 'force-dynamic'
+
 import * as React from "react"
 import { Shield, ArrowRight, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
