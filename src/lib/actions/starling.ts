@@ -48,8 +48,12 @@ export async function syncStarlingTransactions(fromDate?: string, toDate?: strin
         }
 
         // Calculate date range
+        // IMPORTANT: Set 'to' to end of day (23:59:59) to include all transactions from that day
         const to = toDate ? new Date(toDate) : new Date()
+        to.setHours(23, 59, 59, 999)
+
         const from = fromDate ? new Date(fromDate) : new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000)
+        from.setHours(0, 0, 0, 0)
 
         console.log(`[STARLING] Fetching transactions from ${from.toISOString()} to ${to.toISOString()}`)
 
@@ -107,6 +111,9 @@ export async function syncStarlingTransactions(fromDate?: string, toDate?: strin
 
         // Get total balance (including savings pots)
         const totalBalance = await starling.getTotalBalance(account.accountUid)
+
+        // Log balance for debugging
+        console.log(`[STARLING] Total balance: £${totalBalance || 0}`)
 
         // Filter: only SETTLED, exclude all internal transfers (pot-to-main moves)
         // Note: Payments FROM pots to external vendors appear in pot category feeds, not main feed
@@ -202,10 +209,10 @@ export async function syncStarlingTransactions(fromDate?: string, toDate?: strin
             synced,
             skipped,
             errors,
-            balance: {
+            balance: totalBalance !== null ? {
                 cleared: totalBalance,
                 available: totalBalance,
-            },
+            } : undefined,
             preview: dryRun ? preview : undefined
         }
     } catch (error) {

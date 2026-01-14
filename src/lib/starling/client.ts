@@ -165,8 +165,9 @@ class StarlingClient {
 
     /**
      * Get total balance including all savings goals
+     * Returns null if unable to fetch balance
      */
-    async getTotalBalance(accountUid: string): Promise<number> {
+    async getTotalBalance(accountUid: string): Promise<number | null> {
         try {
             // Get main balance
             const balance = await this.getBalance(accountUid)
@@ -192,7 +193,7 @@ class StarlingClient {
             return StarlingClient.toMajorUnits(total)
         } catch (e) {
             console.error('[STARLING] Error fetching total balance:', e)
-            return 0
+            return null
         }
     }
 

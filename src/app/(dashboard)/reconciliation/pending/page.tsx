@@ -25,8 +25,8 @@ export default async function PendingApprovalsPage() {
             {/* Header */}
             <div className="mb-8">
                 <div className="flex items-center gap-3 mb-2">
-                    <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg">
-                        <Zap className="h-6 w-6 text-indigo-600" />
+                    <div className="p-2 bg-secondary rounded-lg">
+                        <Zap className="h-6 w-6" />
                     </div>
                     <div>
                         <h1 className="text-2xl font-black">Pending Approvals</h1>

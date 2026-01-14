@@ -16,6 +16,7 @@ export interface Payable {
     vendor_id: string | null
     staff_id: string | null
     amount: number
+    amount_paid: number
     amount_tax: number
     frequency: Frequency
     next_due: string
@@ -278,23 +279,42 @@ export async function linkPayableToTransaction(payableId: string, transactionId:
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    // Fetch transaction date to use as paid date
+    // Fetch payable to get total amount
+    const { data: payable } = await supabase
+        .from('payables')
+        .select('amount, amount_paid')
+        .eq('id', payableId)
+        .single()
+
+    if (!payable) throw new Error("Payable not found")
+
+    // Fetch transaction to get payment amount and date
     const { data: transaction } = await supabase
         .from('transactions')
-        .select('transaction_date')
+        .select('transaction_date, amount')
         .eq('id', transactionId)
         .single()
 
     const paidDate = transaction?.transaction_date || new Date().toISOString().split('T')[0]
+    const paymentAmount = Math.abs(Number(transaction?.amount || 0))
 
-    // Update payable with transaction date as paid date
+    // Calculate new amount_paid
+    const currentPaid = Number(payable.amount_paid || 0)
+    const newAmountPaid = currentPaid + paymentAmount
+    const totalAmount = Number(payable.amount)
+
+    // Determine if fully paid
+    const isFullyPaid = newAmountPaid >= totalAmount
+
+    // Update payable
     const { error: payableError } = await supabase
         .from('payables')
         .update({
             linked_transaction_id: transactionId,
-            bill_status: 'paid',
-            is_paid: true,
-            reconciled_at: new Date().toISOString(),
+            amount_paid: newAmountPaid,
+            bill_status: isFullyPaid ? 'paid' : 'scheduled', // Keep as scheduled if partial
+            is_paid: isFullyPaid,
+            reconciled_at: isFullyPaid ? new Date().toISOString() : null,
             last_paid_date: paidDate
         })
         .eq('id', payableId)
@@ -392,9 +412,11 @@ export async function unlinkPayableFromTransaction(payableId: string) {
         .from('payables')
         .update({
             linked_transaction_id: null,
-            bill_status: 'approved',
+            amount_paid: 0,  // Reset partial payment tracking
+            bill_status: 'scheduled',
             is_paid: false,
-            reconciled_at: null
+            reconciled_at: null,
+            last_paid_date: null  // Also reset paid date
         })
         .eq('id', payableId)
         .eq('user_id', user.id)
@@ -517,85 +539,156 @@ export async function generateUpcomingBills(targetMonth: number, targetYear: num
     let created = 0
     let skipped = 0
 
-    // Process each template
-    for (const template of templates) {
-        // For yearly templates, only generate if target month matches the template's designated month
-        // We'll use the template name to infer the original month if possible, otherwise generate for all
+    // Helper: Get all Fridays in a month
+    function getFridaysInMonth(year: number, month: number): Date[] {
+        const fridays: Date[] = []
+        const date = new Date(year, month, 1)
 
-        // Check what bills already exist for target month from this template
-        const targetMonthStart = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-01`
-        const targetMonthEnd = new Date(targetYear, targetMonth + 1, 0).toISOString().split('T')[0]
-
-        const { data: existingBill } = await supabase
-            .from('payables')
-            .select('id')
-            .eq('user_id', user.id)
-            .eq('template_id', template.id) // Check by template ID
-            .gte('next_due', targetMonthStart)
-            .lte('next_due', targetMonthEnd)
-            .single()
-
-        if (existingBill) {
-            skipped++
-            continue // Already exists for this month
+        // Find first Friday
+        while (date.getDay() !== 5) {
+            date.setDate(date.getDate() + 1)
         }
 
-        // Use the template's day_of_month, or default to 15
-        const dayOfMonth = template.day_of_month || 15
-        const newDueDate = new Date(targetYear, targetMonth, dayOfMonth)
+        // Collect all Fridays in the month
+        while (date.getMonth() === month) {
+            fridays.push(new Date(date))
+            date.setDate(date.getDate() + 7)
+        }
 
-        // Generate smart name from template name
+        return fridays
+    }
+
+    // Process each template
+    for (const template of templates) {
+        // Get base name (strip date suffixes for smart naming)
         const baseName = template.name
             .replace(/\s*-\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s*\d{4}$/i, '')
             .replace(/\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s*\d{4}$/i, '')
+            .replace(/\s*-\s*Week\s*\d+$/i, '')
+            .replace(/\s*Week\s*\d+$/i, '')
             .replace(/\s*\d{4}-\d{2}$/, '')
             .replace(/\s*\d{1,2}\/\d{4}$/, '')
             .replace(/\s*Q\d\s*\d{4}$/i, '')
             .replace(/\s*\d{4}$/, '')
             .trim()
 
-        // Apply smart naming if enabled on template
-        let newName = baseName
-        if (template.use_smart_name !== false) {
-            if (template.frequency === 'monthly') {
-                newName = `${baseName} - ${months[targetMonth]} ${targetYear}`
-            } else if (template.frequency === 'quarterly') {
-                const quarter = Math.floor(targetMonth / 3) + 1
-                newName = `${baseName} Q${quarter} ${targetYear}`
-            } else if (template.frequency === 'yearly') {
-                newName = `${baseName} ${targetYear}`
-            } else if (template.frequency === 'weekly') {
-                const weekNum = getWeekNumberForDate(newDueDate)
-                newName = `${baseName} Week ${weekNum}`
-            }
-        }
+        // Handle WEEKLY templates - generate 4 Friday bills
+        if (template.frequency === 'weekly') {
+            const fridays = getFridaysInMonth(targetYear, targetMonth)
 
-        // Create the new bill linked to template
-        await supabase.from('payables').insert({
-            user_id: user.id,
-            name: newName,
-            payee_type: template.payee_type,
-            vendor_id: template.vendor_id,
-            staff_id: template.staff_id,
-            amount: template.amount,
-            amount_tax: template.amount_tax,
-            frequency: template.frequency,
-            next_due: newDueDate.toISOString().split('T')[0],
-            is_recurring: false, // Generated bills are NOT templates
-            is_template: false,
-            template_id: template.id, // Link back to template
-            bill_status: template.is_variable_amount ? 'draft' : 'scheduled',
-            is_paid: false,
-            is_system_generated: false,
-            is_variable_amount: template.is_variable_amount || false,
-            category_id: template.category_id,
-            auto_pay: template.auto_pay,
-            reminder_days: template.reminder_days,
-            payment_method: template.payment_method,
-            notes: template.is_variable_amount ? `Estimated: £${template.amount.toFixed(2)} - Update with actual amount` : template.notes,
-            description: template.description
-        })
-        created++
+            for (const friday of fridays) {
+                const fridayStr = friday.toISOString().split('T')[0]
+
+                // Check if bill already exists for this Friday
+                const { data: existing } = await supabase
+                    .from('payables')
+                    .select('id')
+                    .eq('user_id', user.id)
+                    .eq('template_id', template.id)
+                    .eq('next_due', fridayStr)
+                    .single()
+
+                if (existing) {
+                    skipped++
+                    continue
+                }
+
+                // Generate smart name with week number
+                const weekNum = getWeekNumberForDate(friday)
+                const newName = template.use_smart_name !== false
+                    ? `${baseName} - Week ${weekNum}`
+                    : baseName
+
+                // Create the bill
+                await supabase.from('payables').insert({
+                    user_id: user.id,
+                    name: newName,
+                    payee_type: template.payee_type,
+                    vendor_id: template.vendor_id,
+                    staff_id: template.staff_id,
+                    amount: template.amount,
+                    amount_tax: template.amount_tax,
+                    frequency: template.frequency,
+                    next_due: fridayStr,
+                    is_recurring: false,
+                    is_template: false,
+                    template_id: template.id,
+                    bill_status: template.is_variable_amount ? 'draft' : 'scheduled',
+                    is_paid: false,
+                    is_system_generated: false,
+                    is_variable_amount: template.is_variable_amount || false,
+                    category_id: template.category_id,
+                    auto_pay: template.auto_pay,
+                    reminder_days: template.reminder_days,
+                    payment_method: template.payment_method,
+                    notes: template.notes,
+                    description: template.description
+                })
+                created++
+            }
+        } else {
+            // Handle MONTHLY, QUARTERLY, YEARLY - single bill per period
+            const targetMonthStart = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-01`
+            const targetMonthEnd = new Date(targetYear, targetMonth + 1, 0).toISOString().split('T')[0]
+
+            const { data: existingBill } = await supabase
+                .from('payables')
+                .select('id')
+                .eq('user_id', user.id)
+                .eq('template_id', template.id)
+                .gte('next_due', targetMonthStart)
+                .lte('next_due', targetMonthEnd)
+                .single()
+
+            if (existingBill) {
+                skipped++
+                continue
+            }
+
+            // Use the template's day_of_month, or default to 15
+            const dayOfMonth = template.day_of_month || 15
+            const newDueDate = new Date(targetYear, targetMonth, dayOfMonth)
+
+            // Apply smart naming
+            let newName = baseName
+            if (template.use_smart_name !== false) {
+                if (template.frequency === 'monthly') {
+                    newName = `${baseName} - ${months[targetMonth]} ${targetYear}`
+                } else if (template.frequency === 'quarterly') {
+                    const quarter = Math.floor(targetMonth / 3) + 1
+                    newName = `${baseName} Q${quarter} ${targetYear}`
+                } else if (template.frequency === 'yearly') {
+                    newName = `${baseName} ${targetYear}`
+                }
+            }
+
+            // Create the new bill
+            await supabase.from('payables').insert({
+                user_id: user.id,
+                name: newName,
+                payee_type: template.payee_type,
+                vendor_id: template.vendor_id,
+                staff_id: template.staff_id,
+                amount: template.amount,
+                amount_tax: template.amount_tax,
+                frequency: template.frequency,
+                next_due: newDueDate.toISOString().split('T')[0],
+                is_recurring: false,
+                is_template: false,
+                template_id: template.id,
+                bill_status: template.is_variable_amount ? 'draft' : 'scheduled',
+                is_paid: false,
+                is_system_generated: false,
+                is_variable_amount: template.is_variable_amount || false,
+                category_id: template.category_id,
+                auto_pay: template.auto_pay,
+                reminder_days: template.reminder_days,
+                payment_method: template.payment_method,
+                notes: template.is_variable_amount ? `Estimated: £${template.amount.toFixed(2)} - Update with actual amount` : template.notes,
+                description: template.description
+            })
+            created++
+        }
     }
 
     return { created, skipped }

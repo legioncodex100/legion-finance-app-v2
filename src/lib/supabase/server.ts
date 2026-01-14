@@ -1,4 +1,5 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr"
+import { createClient as createSupabaseClient } from "@supabase/supabase-js"
 import { cookies } from "next/headers"
 
 export async function createClient() {
@@ -34,3 +35,24 @@ export async function createClient() {
         }
     )
 }
+
+/**
+ * Service role client - bypasses RLS
+ * Use ONLY in API routes/webhooks where there's no user context
+ */
+export function createServiceClient() {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+
+    if (!serviceRoleKey) {
+        throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY")
+    }
+
+    return createSupabaseClient(supabaseUrl, serviceRoleKey, {
+        auth: {
+            autoRefreshToken: false,
+            persistSession: false
+        }
+    })
+}
+

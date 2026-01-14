@@ -3,7 +3,8 @@
 import * as React from "react"
 import { Plus, Search, Filter, ArrowUpRight, ArrowDownRight, Upload, Loader2, CheckCircle2, AlertCircle, Trash2, MessageSquare, ChevronDown, Database, Settings2, RefreshCcw, ArrowUpDown, ArrowUp, ArrowDown, Receipt, X, FileText, Banknote } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import {
     Card,
     CardContent,
@@ -20,6 +21,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table"
+import { StatCard } from "@/components/dashboard/stat-card"
 import { Badge } from "@/components/ui/badge"
 import { parseStarlingCSV } from "@/lib/transactions-parser"
 import { importTransactions, deleteTransactions, uncategorizeTransactions, bulkReconcileTransactions, clearLedgerData, clearConfigurationData, clearAllFinancialData, getOpeningBalance, setOpeningBalance, getSummaryStats, linkTransactionToPayable, unlinkTransactionFromPayable, getPayablesForLinking } from "@/lib/actions/transactions"
@@ -584,103 +586,97 @@ export default function TransactionsPage() {
 
     return (
         <div className="flex flex-col gap-8">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Transactions</h1>
-                    <p className="text-muted-foreground">
-                        Manage and categorize your academy's financial history.
-                    </p>
-                </div>
-                <div className="flex items-center gap-3">
+            {/* Header Row */}
+            <div>
+                <h1 className="text-3xl font-bold tracking-tight">Transactions</h1>
+                <p className="text-muted-foreground">
+                    Manage and categorize your academy's financial history.
+                </p>
+            </div>
 
-                    <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button
-                                variant="outline"
-                                className="gap-2 text-rose-600 hover:bg-rose-50 border-rose-200 dark:border-rose-900/50 dark:hover:bg-rose-950/30 font-bold h-10"
-                            >
-                                <RefreshCcw className="h-4 w-4" /> System Reset <ChevronDown className="h-3 w-3 opacity-50" />
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-56">
-                            <DropdownMenuLabel>Reset Options</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={handleClearLedger} className="text-orange-600 focus:text-orange-600 gap-2 cursor-pointer">
-                                <Database className="h-4 w-4" /> Clear Ledger Only
-                                <span className="ml-auto text-[10px] opacity-50">Txs only</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={handleClearSetup} className="text-orange-600 focus:text-orange-600 gap-2 cursor-pointer">
-                                <Settings2 className="h-4 w-4" /> Clear Setup Only
-                                <span className="ml-auto text-[10px] opacity-50">Cats/Vendors</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={handleClearAll} className="bg-rose-50 text-rose-600 focus:bg-rose-100 focus:text-rose-700 gap-2 font-bold cursor-pointer">
-                                <Trash2 className="h-4 w-4" /> Factory Reset
-                                <span className="ml-auto text-[10px] opacity-50">Nuclear</span>
-                            </DropdownMenuItem>
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                    <div className="relative">
-                        <label htmlFor="csv-upload" className="cursor-pointer">
-                            <div className="flex items-center gap-2 px-4 py-2 rounded-md bg-black text-white dark:bg-white dark:text-black hover:opacity-90 transition-opacity font-medium h-10">
-                                {isImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                                {isImporting ? "Bulk Importing..." : "Import Starling CSV"}
-                            </div>
-                        </label>
-                        <input
-                            id="csv-upload"
-                            type="file"
-                            accept=".csv"
-                            className="hidden"
-                            onChange={handleFileUpload}
-                            disabled={isImporting}
-                        />
-                    </div>
-                    <Button
-                        onClick={() => {
-                            // Update dates when modal opens
-                            const today = new Date().toISOString().split('T')[0]
-                            setSyncToDate(today)
-                            const savedSync = localStorage.getItem('lastSyncDate')
-                            if (savedSync) {
-                                setSyncFromDate(savedSync)
-                            }
-                            setSyncModalOpen(true)
-                        }}
-                        disabled={isSyncingBank}
-                        variant="outline"
-                        className="gap-2 border-purple-800 text-purple-400 hover:bg-purple-900/30 h-10"
-                    >
-                        {isSyncingBank ? <Loader2 className="h-4 w-4 animate-spin" /> : <Banknote className="h-4 w-4" />}
-                        {isSyncingBank ? 'Syncing...' : 'Sync Bank'}
-                    </Button>
-                    <Button
-                        onClick={() => setIsAddTxModalOpen(true)}
-                        className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white h-10"
-                    >
-                        <Plus className="h-4 w-4" />
-                        Add Transaction
-                    </Button>
-                </div>
+            {/* Actions Row */}
+            <div className="flex items-center justify-end gap-3">
+                {/* Hidden Input for Import - kept outside/nearby */}
+                <input
+                    id="csv-upload"
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={handleFileUpload}
+                    disabled={isImporting}
+                />
+
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button disabled={isImporting || isSyncingBank}>
+                            {isImporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            Actions <ChevronDown className="ml-2 h-4 w-4" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+
+                        <DropdownMenuItem onClick={() => setIsAddTxModalOpen(true)} className="cursor-pointer">
+                            <Plus className="mr-2 h-4 w-4" /> Add Transaction
+                        </DropdownMenuItem>
+
+                        <DropdownMenuItem onClick={() => setSyncModalOpen(true)} disabled={isSyncingBank} className="cursor-pointer">
+                            {isSyncingBank ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Banknote className="mr-2 h-4 w-4" />}
+                            Sync Bank
+                        </DropdownMenuItem>
+
+                        <DropdownMenuItem asChild>
+                            <label htmlFor="csv-upload" className="cursor-pointer w-full flex items-center">
+                                <Upload className="mr-2 h-4 w-4" /> Import Starling CSV
+                            </label>
+                        </DropdownMenuItem>
+
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="text-destructive">Danger Zone</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+
+                        <DropdownMenuItem onClick={handleClearLedger} className="text-orange-600 focus:text-orange-600 cursor-pointer">
+                            <Database className="mr-2 h-4 w-4" /> Clear Ledger Only
+                        </DropdownMenuItem>
+
+                        <DropdownMenuItem onClick={handleClearSetup} className="text-orange-600 focus:text-orange-600 cursor-pointer">
+                            <Settings2 className="mr-2 h-4 w-4" /> Clear Setup Only
+                        </DropdownMenuItem>
+
+                        <DropdownMenuItem onClick={handleClearAll} className="text-destructive focus:text-destructive focus:bg-destructive/10 cursor-pointer font-semibold">
+                            <Trash2 className="mr-2 h-4 w-4" /> Factory Reset
+                        </DropdownMenuItem>
+                    </DropdownMenuContent>
+                </DropdownMenu>
             </div>
 
             {/* Summary Stats Bar */}
             <div className="grid grid-cols-4 gap-4">
-                <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/50 rounded-xl p-4">
-                    <div className="text-[10px] uppercase font-black tracking-widest text-emerald-600/70 dark:text-emerald-400/70">Total Income</div>
-                    <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 tabular-nums">+£{summaryStats.income.toFixed(2)}</div>
-                </div>
-                <div className="bg-rose-50 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900/50 rounded-xl p-4">
-                    <div className="text-[10px] uppercase font-black tracking-widest text-rose-600/70 dark:text-rose-400/70">Total Expenses</div>
-                    <div className="text-2xl font-black text-rose-600 dark:text-rose-400 tabular-nums">-£{summaryStats.expense.toFixed(2)}</div>
-                </div>
-                <div className={`${summaryStats.net >= 0 ? 'bg-indigo-50 dark:bg-indigo-950/30 border-indigo-100 dark:border-indigo-900/50' : 'bg-orange-50 dark:bg-orange-950/30 border-orange-100 dark:border-orange-900/50'} border rounded-xl p-4`}>
-                    <div className={`text-[10px] uppercase font-black tracking-widest ${summaryStats.net >= 0 ? 'text-indigo-600/70 dark:text-indigo-400/70' : 'text-orange-600/70 dark:text-orange-400/70'}`}>Net Position</div>
-                    <div className={`text-2xl font-black tabular-nums ${summaryStats.net >= 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-orange-600 dark:text-orange-400'}`}>
-                        {summaryStats.net >= 0 ? '+' : '-'}£{Math.abs(summaryStats.net).toFixed(2)}
-                    </div>
-                </div>
-                <button
+                <StatCard
+                    title="Total Income"
+                    value={summaryStats.income.toFixed(2)}
+                    valuePrefix="+£"
+                    status="success"
+                />
+                <StatCard
+                    title="Total Expenses"
+                    value={summaryStats.expense.toFixed(2)}
+                    valuePrefix="-£"
+                    status="danger"
+                />
+                <StatCard
+                    title="Net Position"
+                    value={Math.abs(summaryStats.net).toFixed(2)}
+                    valuePrefix={summaryStats.net >= 0 ? "+£" : "-£"}
+                    status={summaryStats.net >= 0 ? "info" : "warning"}
+                />
+                <StatCard
+                    title="Bank Balance"
+                    value={(lastBankBalance !== null ? lastBankBalance : (openingBalance + summaryStats.net)).toFixed(2)}
+                    valuePrefix="£"
+                    status="info"
+                    subtext={lastBankBalance !== null ? "(from Starling)" : "(click to edit)"}
                     onClick={async () => {
                         const newBalance = prompt("Enter your opening bank balance (before any imported transactions):", openingBalance.toString())
                         if (newBalance !== null) {
@@ -691,15 +687,7 @@ export default function TransactionsPage() {
                             }
                         }
                     }}
-                    className="bg-gradient-to-br from-cyan-50 to-sky-100 dark:from-cyan-950/40 dark:to-sky-900/30 border border-cyan-200 dark:border-cyan-800/50 rounded-xl p-4 text-left hover:shadow-md transition-shadow cursor-pointer"
-                >
-                    <div className="text-[10px] uppercase font-black tracking-widest text-cyan-600/70 dark:text-cyan-400/70 flex items-center gap-1">
-                        Bank Balance {lastBankBalance !== null ? <span className="text-[8px] opacity-50">(from Starling)</span> : <span className="text-[8px] opacity-50">(click to edit)</span>}
-                    </div>
-                    <div className="text-2xl font-black text-cyan-600 dark:text-cyan-400 tabular-nums">
-                        £{(lastBankBalance !== null ? lastBankBalance : (openingBalance + summaryStats.net)).toFixed(2)}
-                    </div>
-                </button>
+                />
             </div>
 
             <Card className="shadow-sm border-slate-200 dark:border-zinc-800">
@@ -789,7 +777,7 @@ export default function TransactionsPage() {
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-8 text-[10px] font-bold h-7 px-2 text-muted-foreground hover:text-rose-600"
+                                className="h-8 text-[10px] font-bold h-7 px-2 text-muted-foreground hover:text-destructive"
                                 onClick={() => {
                                     setFilterStatus('all')
                                     setFilterMonth((new Date().getMonth() + 1).toString())
@@ -811,14 +799,14 @@ export default function TransactionsPage() {
                         </span>
                         <span className="text-muted-foreground">•</span>
                         <span className="flex items-center gap-1.5">
-                            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                            <span className="font-bold text-emerald-600 dark:text-emerald-400">{reconciledCount.toLocaleString()}</span>
+                            <CheckCircle2 className="h-4 w-4 text-success" />
+                            <span className="font-bold text-success">{reconciledCount.toLocaleString()}</span>
                             <span className="text-muted-foreground">reconciled</span>
                         </span>
                         <span className="text-muted-foreground">•</span>
                         <span className="flex items-center gap-1.5">
-                            <AlertCircle className="h-4 w-4 text-amber-500" />
-                            <span className="font-bold text-amber-600 dark:text-amber-400">{pendingCount.toLocaleString()}</span>
+                            <AlertCircle className="h-4 w-4 text-warning" />
+                            <span className="font-bold text-warning">{pendingCount.toLocaleString()}</span>
                             <span className="text-muted-foreground">pending</span>
                         </span>
                     </div>
@@ -828,144 +816,289 @@ export default function TransactionsPage() {
                 </div>
 
                 <CardContent className="p-0">
-                    <Table>
-                        <TableHeader>
-                            <TableRow className="bg-slate-50/50 dark:bg-zinc-950/50 border-b border-slate-200 dark:border-zinc-800">
-                                <TableHead className="w-[40px] px-6">
-                                    <input
-                                        type="checkbox"
-                                        className="h-4 w-4 rounded border-slate-300 dark:border-zinc-700 accent-black dark:accent-white cursor-pointer"
-                                        checked={selectedIds.size === items.length && items.length > 0}
-                                        onChange={toggleSelectAll}
-                                    />
-                                </TableHead>
-                                <TableHead
-                                    className="w-[120px] font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors"
-                                    onClick={() => {
-                                        if (sortColumn === 'date') {
-                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
-                                        } else {
-                                            setSortColumn('date')
-                                            setSortDirection('desc')
-                                        }
-                                    }}
-                                >
-                                    <div className="flex items-center gap-1">
-                                        Date
-                                        {sortColumn === 'date' ? (
-                                            sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                        ) : (
-                                            <ArrowUpDown className="h-3 w-3 opacity-30" />
-                                        )}
-                                    </div>
-                                </TableHead>
-                                <TableHead
-                                    className="font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors"
-                                    onClick={() => {
-                                        if (sortColumn === 'party') {
-                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
-                                        } else {
-                                            setSortColumn('party')
-                                            setSortDirection('asc')
-                                        }
-                                    }}
-                                >
-                                    <div className="flex items-center gap-1">
-                                        Counter Party
-                                        {sortColumn === 'party' ? (
-                                            sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                        ) : (
-                                            <ArrowUpDown className="h-3 w-3 opacity-30" />
-                                        )}
-                                    </div>
-                                </TableHead>
-                                <TableHead className="font-bold">Category</TableHead>
-                                <TableHead
-                                    className="text-right font-bold w-[150px] cursor-pointer hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors"
-                                    onClick={() => {
-                                        if (sortColumn === 'amount') {
-                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
-                                        } else {
-                                            setSortColumn('amount')
-                                            setSortDirection('desc')
-                                        }
-                                    }}
-                                >
-                                    <div className="flex items-center justify-end gap-1">
-                                        Amount
-                                        {sortColumn === 'amount' ? (
-                                            sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                        ) : (
-                                            <ArrowUpDown className="h-3 w-3 opacity-30" />
-                                        )}
-                                    </div>
-                                </TableHead>
-                                <TableHead
-                                    className="text-right font-bold w-[120px] px-6 cursor-pointer hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors"
-                                    onClick={() => {
-                                        if (sortColumn === 'status') {
-                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
-                                        } else {
-                                            setSortColumn('status')
-                                            setSortDirection('asc')
-                                        }
-                                    }}
-                                >
-                                    <div className="flex items-center justify-end gap-1">
-                                        Status
-                                        {sortColumn === 'status' ? (
-                                            sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                        ) : (
-                                            <ArrowUpDown className="h-3 w-3 opacity-30" />
-                                        )}
-                                    </div>
-                                </TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {isLoading ? (
-                                <TableRow>
-                                    <TableCell colSpan={6} className="h-32 text-center text-muted-foreground italic">
-                                        <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                                        Fetching transactions...
-                                    </TableCell>
+                    <div className="hidden md:block">
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-slate-50/50 dark:bg-zinc-950/50 border-b border-slate-200 dark:border-zinc-800">
+                                    <TableHead className="w-[40px] px-6">
+                                        <input
+                                            type="checkbox"
+                                            className="h-4 w-4 rounded border-slate-300 dark:border-zinc-700 accent-black dark:accent-white cursor-pointer"
+                                            checked={selectedIds.size === items.length && items.length > 0}
+                                            onChange={toggleSelectAll}
+                                        />
+                                    </TableHead>
+                                    <TableHead
+                                        className="w-[120px] font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors"
+                                        onClick={() => {
+                                            if (sortColumn === 'date') {
+                                                setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+                                            } else {
+                                                setSortColumn('date')
+                                                setSortDirection('desc')
+                                            }
+                                        }}
+                                    >
+                                        <div className="flex items-center gap-1">
+                                            Date
+                                            {sortColumn === 'date' ? (
+                                                sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                                            ) : (
+                                                <ArrowUpDown className="h-3 w-3 opacity-30" />
+                                            )}
+                                        </div>
+                                    </TableHead>
+                                    <TableHead
+                                        className="font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors"
+                                        onClick={() => {
+                                            if (sortColumn === 'party') {
+                                                setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+                                            } else {
+                                                setSortColumn('party')
+                                                setSortDirection('asc')
+                                            }
+                                        }}
+                                    >
+                                        <div className="flex items-center gap-1">
+                                            Counter Party
+                                            {sortColumn === 'party' ? (
+                                                sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                                            ) : (
+                                                <ArrowUpDown className="h-3 w-3 opacity-30" />
+                                            )}
+                                        </div>
+                                    </TableHead>
+                                    <TableHead className="font-bold">Category</TableHead>
+                                    <TableHead
+                                        className="text-right font-bold w-[150px] cursor-pointer hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors"
+                                        onClick={() => {
+                                            if (sortColumn === 'amount') {
+                                                setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+                                            } else {
+                                                setSortColumn('amount')
+                                                setSortDirection('desc')
+                                            }
+                                        }}
+                                    >
+                                        <div className="flex items-center justify-end gap-1">
+                                            Amount
+                                            {sortColumn === 'amount' ? (
+                                                sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                                            ) : (
+                                                <ArrowUpDown className="h-3 w-3 opacity-30" />
+                                            )}
+                                        </div>
+                                    </TableHead>
+                                    <TableHead
+                                        className="text-right font-bold w-[120px] px-6 cursor-pointer hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors"
+                                        onClick={() => {
+                                            if (sortColumn === 'status') {
+                                                setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+                                            } else {
+                                                setSortColumn('status')
+                                                setSortDirection('asc')
+                                            }
+                                        }}
+                                    >
+                                        <div className="flex items-center justify-end gap-1">
+                                            Status
+                                            {sortColumn === 'status' ? (
+                                                sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                                            ) : (
+                                                <ArrowUpDown className="h-3 w-3 opacity-30" />
+                                            )}
+                                        </div>
+                                    </TableHead>
                                 </TableRow>
-                            ) : items.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={6} className="h-32 text-center text-muted-foreground italic">
-                                        No transactions found. Upload a CSV to get started.
-                                    </TableCell>
-                                </TableRow>
-                            ) : (
-                                items.map((t) => (
-                                    <TableRow key={t.id} className={`hover:bg-slate-100 dark:hover:bg-zinc-800 border-b border-slate-100 dark:border-zinc-900 transition-colors ${selectedIds.has(t.id) ? 'bg-slate-100 dark:bg-zinc-700' : ''}`}>
-                                        <TableCell className="px-6">
+                            </TableHeader>
+                            <TableBody>
+                                {isLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={6} className="h-32 text-center text-muted-foreground italic">
+                                            <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                                            Fetching transactions...
+                                        </TableCell>
+                                    </TableRow>
+                                ) : items.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={6} className="h-32 text-center text-muted-foreground italic">
+                                            No transactions found. Upload a CSV to get started.
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    items.map((t) => (
+                                        <TableRow key={t.id} className={`hover:bg-slate-100 dark:hover:bg-zinc-800 border-b border-slate-100 dark:border-zinc-900 transition-colors ${selectedIds.has(t.id) ? 'bg-slate-100 dark:bg-zinc-700' : ''}`}>
+                                            <TableCell className="px-6">
+                                                <input
+                                                    type="checkbox"
+                                                    className="h-4 w-4 rounded border-slate-300 dark:border-zinc-700 accent-black dark:accent-white cursor-pointer"
+                                                    checked={selectedIds.has(t.id)}
+                                                    onChange={() => toggleSelectRow(t.id)}
+                                                />
+                                            </TableCell>
+                                            <TableCell className="text-[10px] font-bold uppercase tracking-tight text-muted-foreground">
+                                                {new Date(t.transaction_date).toLocaleDateString()}
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="flex flex-col">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-semibold text-sm">
+                                                            {t.staff?.name
+                                                                ? `${t.staff.name} (${t.staff.role})`
+                                                                : t.vendors?.name || t.raw_party || "Unknown"}
+                                                        </span>
+                                                        {t.notes && <MessageSquare className="h-3 w-3 text-indigo-500" />}
+                                                    </div>
+                                                    <span className="text-[10px] text-muted-foreground truncate max-w-[200px] italic">
+                                                        {t.description}
+                                                    </span>
+                                                </div>
+                                            </TableCell>
+                                            <TableCell>
+                                                <CategorySelector
+                                                    transactionId={t.id}
+                                                    amount={t.amount}
+                                                    currentCategoryId={t.category_id}
+                                                    aiSuggestion={t.ai_suggested}
+                                                    confirmed={t.confirmed}
+                                                    categories={categories}
+                                                    onUpdate={() => {
+                                                        fetchTransactions()
+                                                        fetchCategories()
+                                                        fetchReconciliationCounts()
+                                                    }}
+                                                />
+                                            </TableCell>
+                                            <TableCell className="text-right px-4">
+                                                <span className={`font-black tabular-nums text-sm ${t.amount < 0 ? 'text-destructive' : 'text-success'}`}>
+                                                    {t.amount < 0 ? `-£${Math.abs(t.amount).toFixed(2)}` : `+£${t.amount.toFixed(2)}`}
+                                                </span>
+                                            </TableCell>
+                                            <TableCell className="text-right px-6">
+                                                <div className="flex items-center justify-end gap-2">
+                                                    {t.confirmed ? (
+                                                        <div className="flex items-center gap-1" title={t.matched_rule_id ? "Auto-reconciled by rule" : "Manually reconciled"}>
+                                                            <CheckCircle2 className="h-4 w-4 text-success" />
+                                                            {t.matched_rule_id && (
+                                                                <Settings2 className="h-3 w-3 text-indigo-500" />
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest flex items-center justify-end gap-1">
+                                                            <AlertCircle className="h-3 w-3" /> Review
+                                                        </span>
+                                                    )}
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
+                                                        onClick={() => {
+                                                            setReconcileTx(t)
+                                                            setIsReconcileModalOpen(true)
+                                                        }}
+                                                        title="Advanced Reconcile"
+                                                    >
+                                                        <Filter className="h-4 w-4" />
+                                                    </Button>
+                                                    {/* Link to Invoice - only for outgoing transactions */}
+                                                    {t.amount < 0 && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-8 w-8 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                                                            onClick={() => {
+                                                                setLinkingTx(t)
+                                                                setLinkAmount(Math.abs(t.amount).toString())
+                                                                setIsInvoiceLinkModalOpen(true)
+                                                            }}
+                                                            title="Link to Invoice"
+                                                        >
+                                                            <Receipt className="h-4 w-4" />
+                                                        </Button>
+                                                    )}
+                                                    {/* Link to Bill - only for outgoing transactions */}
+                                                    {t.amount < 0 && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className={`h-8 w-8 ${t.linked_payable_id ? 'text-cyan-600' : 'text-muted-foreground'} hover:text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-950/30`}
+                                                            onClick={() => {
+                                                                setLinkingPayableTx(t)
+                                                                setIsPayableLinkModalOpen(true)
+                                                            }}
+                                                            title={t.linked_payable_id ? "Linked to Payable" : "Link to Payable"}
+                                                        >
+                                                            <FileText className="h-4 w-4" />
+                                                        </Button>
+                                                    )}
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                                                        onClick={() => handleDelete(t.id)}
+                                                    >
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </Button>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+
+                    {/* Mobile Card View */}
+                    <div className="md:hidden divide-y divide-zinc-100 dark:divide-zinc-800">
+                        {isLoading ? (
+                            <div className="py-12 text-center text-muted-foreground italic">
+                                <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                                Fetching transactions...
+                            </div>
+                        ) : items.length === 0 ? (
+                            <div className="py-12 text-center text-muted-foreground italic">
+                                No transactions found. Upload a CSV to get started.
+                            </div>
+                        ) : (
+                            items.map((t) => (
+                                <div key={t.id} className={`p-4 flex flex-col gap-3 transition-colors ${selectedIds.has(t.id) ? 'bg-zinc-50 dark:bg-zinc-900' : 'bg-white dark:bg-zinc-950'}`}>
+                                    <div className="flex justify-between items-start">
+                                        <div className="flex items-start gap-3">
                                             <input
                                                 type="checkbox"
-                                                className="h-4 w-4 rounded border-slate-300 dark:border-zinc-700 accent-black dark:accent-white cursor-pointer"
+                                                className="mt-1 h-4 w-4 rounded border-slate-300 dark:border-zinc-700 accent-black dark:accent-white cursor-pointer"
                                                 checked={selectedIds.has(t.id)}
                                                 onChange={() => toggleSelectRow(t.id)}
                                             />
-                                        </TableCell>
-                                        <TableCell className="text-[10px] font-bold uppercase tracking-tight text-muted-foreground">
-                                            {new Date(t.transaction_date).toLocaleDateString()}
-                                        </TableCell>
-                                        <TableCell>
-                                            <div className="flex flex-col">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="font-semibold text-sm">
-                                                        {t.staff?.name
-                                                            ? `${t.staff.name} (${t.staff.role})`
-                                                            : t.vendors?.name || t.raw_party || "Unknown"}
-                                                    </span>
-                                                    {t.notes && <MessageSquare className="h-3 w-3 text-indigo-500" />}
+                                            <div>
+                                                <div className="text-[10px] font-bold uppercase tracking-tight text-muted-foreground">
+                                                    {new Date(t.transaction_date).toLocaleDateString()}
                                                 </div>
-                                                <span className="text-[10px] text-muted-foreground truncate max-w-[200px] italic">
+                                                <div className="font-semibold text-sm mt-0.5">
+                                                    {t.staff?.name
+                                                        ? `${t.staff.name}`
+                                                        : t.vendors?.name || t.raw_party || "Unknown"}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground italic truncate max-w-[180px]">
                                                     {t.description}
-                                                </span>
+                                                </div>
                                             </div>
-                                        </TableCell>
-                                        <TableCell>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className={`font-black text-base ${t.amount < 0 ? 'text-destructive' : 'text-success'}`}>
+                                                {t.amount < 0 ? `-£${Math.abs(t.amount).toFixed(2)}` : `+£${t.amount.toFixed(2)}`}
+                                            </div>
+                                            {t.confirmed && (
+                                                <div className="flex items-center justify-end gap-1 mt-1">
+                                                    <CheckCircle2 className="h-3 w-3 text-success" />
+                                                    {t.matched_rule_id && <Settings2 className="h-3 w-3 text-indigo-500" />}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex-1">
                                             <CategorySelector
                                                 transactionId={t.id}
                                                 amount={t.amount}
@@ -979,84 +1112,33 @@ export default function TransactionsPage() {
                                                     fetchReconciliationCounts()
                                                 }}
                                             />
-                                        </TableCell>
-                                        <TableCell className="text-right px-4">
-                                            <span className={`font-black tabular-nums text-sm ${t.amount < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                                                {t.amount < 0 ? `-£${Math.abs(t.amount).toFixed(2)}` : `+£${t.amount.toFixed(2)}`}
-                                            </span>
-                                        </TableCell>
-                                        <TableCell className="text-right px-6">
-                                            <div className="flex items-center justify-end gap-2">
-                                                {t.confirmed ? (
-                                                    <div className="flex items-center gap-1" title={t.matched_rule_id ? "Auto-reconciled by rule" : "Manually reconciled"}>
-                                                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                                                        {t.matched_rule_id && (
-                                                            <Settings2 className="h-3 w-3 text-indigo-500" />
-                                                        )}
-                                                    </div>
-                                                ) : (
-                                                    <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest flex items-center justify-end gap-1">
-                                                        <AlertCircle className="h-3 w-3" /> Review
-                                                    </span>
-                                                )}
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
-                                                    onClick={() => {
-                                                        setReconcileTx(t)
-                                                        setIsReconcileModalOpen(true)
-                                                    }}
-                                                    title="Advanced Reconcile"
-                                                >
-                                                    <Filter className="h-4 w-4" />
-                                                </Button>
-                                                {/* Link to Invoice - only for outgoing transactions */}
-                                                {t.amount < 0 && (
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
-                                                        onClick={() => {
-                                                            setLinkingTx(t)
-                                                            setLinkAmount(Math.abs(t.amount).toString())
-                                                            setIsInvoiceLinkModalOpen(true)
-                                                        }}
-                                                        title="Link to Invoice"
-                                                    >
-                                                        <Receipt className="h-4 w-4" />
-                                                    </Button>
-                                                )}
-                                                {/* Link to Bill - only for outgoing transactions */}
-                                                {t.amount < 0 && (
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className={`h-8 w-8 ${t.linked_payable_id ? 'text-cyan-600' : 'text-muted-foreground'} hover:text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-950/30`}
-                                                        onClick={() => {
-                                                            setLinkingPayableTx(t)
-                                                            setIsPayableLinkModalOpen(true)
-                                                        }}
-                                                        title={t.linked_payable_id ? "Linked to Payable" : "Link to Payable"}
-                                                    >
-                                                        <FileText className="h-4 w-4" />
-                                                    </Button>
-                                                )}
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8 text-muted-foreground hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30"
-                                                    onClick={() => handleDelete(t.id)}
-                                                >
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </div>
-                                        </TableCell>
-                                    </TableRow>
-                                ))
-                            )}
-                        </TableBody>
-                    </Table>
+                                        </div>
+                                        <div className="flex items-center">
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 text-muted-foreground hover:text-indigo-600"
+                                                onClick={() => {
+                                                    setReconcileTx(t)
+                                                    setIsReconcileModalOpen(true)
+                                                }}
+                                            >
+                                                <Filter className="h-4 w-4" />
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                                onClick={() => handleDelete(t.id)}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
                 </CardContent>
 
                 {/* Pagination Controls */}
@@ -1064,9 +1146,9 @@ export default function TransactionsPage() {
                     <div className="flex items-center gap-4 text-sm text-muted-foreground">
                         <span>Showing {((currentPage - 1) * PAGE_SIZE) + 1} - {Math.min(currentPage * PAGE_SIZE, totalCount)} of {totalCount}</span>
                         <span>•</span>
-                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">{reconciledCount} reconciled</span>
+                        <span className="text-success font-medium">{reconciledCount} reconciled</span>
                         <span>•</span>
-                        <span className="text-amber-600 dark:text-amber-400 font-medium">{pendingCount} pending</span>
+                        <span className="text-warning font-medium">{pendingCount} pending</span>
                     </div>
                     <div className="flex items-center gap-2">
                         <Button
@@ -1241,7 +1323,7 @@ export default function TransactionsPage() {
 
                         <div className="mb-4 p-3 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
                             <p className="text-sm font-medium">{linkingTx.raw_party || linkingTx.description}</p>
-                            <p className="text-lg font-bold text-rose-600">-£{Math.abs(linkingTx.amount).toFixed(2)}</p>
+                            <p className="text-lg font-bold text-destructive">-£{Math.abs(linkingTx.amount).toFixed(2)}</p>
                             <p className="text-xs text-muted-foreground">{new Date(linkingTx.transaction_date).toLocaleDateString()}</p>
                         </div>
 
@@ -1310,7 +1392,7 @@ export default function TransactionsPage() {
 
                         <div className="mb-4 p-3 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
                             <p className="text-sm font-medium">{linkingPayableTx.raw_party || linkingPayableTx.description}</p>
-                            <p className="text-lg font-bold text-rose-600">-£{Math.abs(linkingPayableTx.amount).toFixed(2)}</p>
+                            <p className="text-lg font-bold text-destructive">-£{Math.abs(linkingPayableTx.amount).toFixed(2)}</p>
                             <p className="text-xs text-muted-foreground">{new Date(linkingPayableTx.transaction_date).toLocaleDateString()}</p>
                         </div>
 
@@ -1343,7 +1425,7 @@ export default function TransactionsPage() {
                                             >
                                                 <div className="flex justify-between items-center">
                                                     <span className="text-sm font-medium">{p.vendor_name || p.staff_name || p.name}</span>
-                                                    <span className="text-sm font-bold text-rose-600">£{Number(p.amount).toFixed(2)}</span>
+                                                    <span className="text-sm font-bold text-destructive">£{Number(p.amount).toFixed(2)}</span>
                                                 </div>
                                                 {p.next_due && (
                                                     <span className="text-xs text-muted-foreground">Due: {new Date(p.next_due).toLocaleDateString()}</span>

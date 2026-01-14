@@ -53,7 +53,7 @@ export default async function DashboardLayout({
                         </Breadcrumb>
                     </div>
                 </header>
-                <main className="flex flex-1 flex-col gap-6 p-6 md:p-8 bg-slate-50/50 dark:bg-black">
+                <main className="flex flex-1 flex-col gap-4 p-4 md:gap-6 md:p-8 bg-slate-50/50 dark:bg-black">
                     {children}
                 </main>
                 <FinancialAIChat />

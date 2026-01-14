@@ -41,8 +41,8 @@ export function RunRulesButton() {
             <Button
                 onClick={handleRun}
                 disabled={loading}
-                variant="outline"
-                className="gap-2 border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/10 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-bold h-11"
+                variant="default"
+                className="gap-2 h-10"
             >
                 {loading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

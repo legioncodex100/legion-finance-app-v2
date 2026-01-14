@@ -1,4 +1,4 @@
-import { Zap, Shield, User, Bell, Database, Layers, Bot, RefreshCw, Bug } from "lucide-react"
+import { Zap, Shield, User, Bell, Database, Layers, Bot, RefreshCw, Bug, FileText } from "lucide-react"
 import Link from "next/link"
 
 export default function SettingsPage() {
@@ -26,6 +26,14 @@ export default function SettingsPage() {
             href: "/settings/debug",
             color: "text-orange-500",
             bgColor: "bg-orange-100 dark:bg-orange-900/30"
+        },
+        {
+            title: "API & Webhook Logs",
+            description: "View all incoming webhooks, API calls, and sync activity logs.",
+            icon: FileText,
+            href: "/settings/logs",
+            color: "text-pink-500",
+            bgColor: "bg-pink-100 dark:bg-pink-900/30"
         },
         {
             title: "Financial Classes",

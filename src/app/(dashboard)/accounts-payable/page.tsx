@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Plus, Loader2, Calendar, AlertCircle, CheckCircle2, Pencil, Trash2, X, Zap, Link2, Upload, Eye, Users, Building2, Bot, DollarSign, Banknote, ChevronLeft, ChevronRight, LayoutList, CalendarDays, CalendarPlus, FileText, Pause, Play, Square } from "lucide-react"
+import { Plus, Loader2, Calendar, AlertCircle, CheckCircle2, Pencil, Trash2, X, Zap, Link2, Upload, Eye, Users, Building2, Bot, DollarSign, Banknote, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, LayoutList, CalendarDays, CalendarPlus, FileText, Pause, Play, Square } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +24,7 @@ import {
     markPayableAsUnpaid,
     linkPayableToTransaction,
     linkPayableRetroactive,
+    unlinkPayableFromTransaction,
     generateStaffSalaryBills,
     generateUpcomingBills,
     getTemplates,
@@ -51,6 +52,9 @@ export default function AccountsPayablePage() {
     const [filterPayee, setFilterPayee] = React.useState<'all' | 'vendor' | 'staff' | 'system'>('all')
     const [filterMonth, setFilterMonth] = React.useState<number | 'all'>('all')
     const [filterYear, setFilterYear] = React.useState<number>(new Date().getFullYear())
+    const [searchQuery, setSearchQuery] = React.useState('')
+    const [sortColumn, setSortColumn] = React.useState<'name' | 'amount' | 'due' | 'paid'>('due')
+    const [sortDirection, setSortDirection] = React.useState<'asc' | 'desc'>('asc')
     const [viewMode, setViewMode] = React.useState<'table' | 'calendar'>('table')
     const [calendarMonth, setCalendarMonth] = React.useState(new Date())
     const [activeTab, setActiveTab] = React.useState<'bills' | 'templates'>('bills')
@@ -95,6 +99,10 @@ export default function AccountsPayablePage() {
     const [selectedPayable, setSelectedPayable] = React.useState<Payable | null>(null)
     const [linkedTransaction, setLinkedTransaction] = React.useState<any | null>(null)
     const [loadingDetail, setLoadingDetail] = React.useState(false)
+
+    // Bulk selection
+    const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
+    const [isDeleting, setIsDeleting] = React.useState(false)
 
     const supabase = createClient()
 
@@ -209,6 +217,45 @@ export default function AccountsPayablePage() {
         fetchData()
     }
 
+    // Bulk selection handlers
+    const toggleSelection = (id: string, e: React.MouseEvent) => {
+        e.stopPropagation()
+        setSelectedIds(prev => {
+            const next = new Set(prev)
+            if (next.has(id)) {
+                next.delete(id)
+            } else {
+                next.add(id)
+            }
+            return next
+        })
+    }
+
+    const toggleSelectAll = () => {
+        if (selectedIds.size === filteredPayables.length) {
+            setSelectedIds(new Set())
+        } else {
+            setSelectedIds(new Set(filteredPayables.map(p => p.id)))
+        }
+    }
+
+    const handleBulkDelete = async () => {
+        if (selectedIds.size === 0) return
+        if (!confirm(`Delete ${selectedIds.size} selected bill(s)? This cannot be undone.`)) return
+
+        setIsDeleting(true)
+        try {
+            for (const id of selectedIds) {
+                await deletePayable(id)
+            }
+            setSelectedIds(new Set())
+            fetchData()
+        } catch (e) {
+            console.error('Bulk delete error:', e)
+        }
+        setIsDeleting(false)
+    }
+
     const openLinkModal = async (payable: Payable) => {
         setLinkingPayable(payable)
         setLinkModalOpen(true)
@@ -284,6 +331,17 @@ export default function AccountsPayablePage() {
         const isOverdue = dueDate < today && p.bill_status !== 'paid'
         const isDueSoon = dueDate >= today && dueDate <= weekFromNow && p.bill_status !== 'paid'
 
+        // Search filter
+        if (searchQuery) {
+            const query = searchQuery.toLowerCase()
+            const matchesName = p.name.toLowerCase().includes(query)
+            const matchesVendor = p.vendors?.name?.toLowerCase().includes(query)
+            const matchesStaff = p.staff?.name?.toLowerCase().includes(query)
+            const matchesNotes = p.notes?.toLowerCase().includes(query)
+            const matchesInvoice = p.invoice_number?.toLowerCase().includes(query)
+            if (!matchesName && !matchesVendor && !matchesStaff && !matchesNotes && !matchesInvoice) return false
+        }
+
         if (filterStatus === 'overdue' && !isOverdue) return false
         if (filterStatus === 'due-soon' && !isDueSoon) return false
         if (filterStatus === 'scheduled' && (isOverdue || isDueSoon || p.bill_status === 'paid')) return false
@@ -300,6 +358,39 @@ export default function AccountsPayablePage() {
 
         return true
     })
+
+    // Sort the filtered results
+    const sortedPayables = [...filteredPayables].sort((a, b) => {
+        let comparison = 0
+        switch (sortColumn) {
+            case 'name':
+                comparison = a.name.localeCompare(b.name)
+                break
+            case 'amount':
+                const aRemaining = a.amount - (a.amount_paid ?? 0)
+                const bRemaining = b.amount - (b.amount_paid ?? 0)
+                comparison = aRemaining - bRemaining
+                break
+            case 'due':
+                comparison = new Date(a.next_due).getTime() - new Date(b.next_due).getTime()
+                break
+            case 'paid':
+                const aPaid = a.last_paid_date ? new Date(a.last_paid_date).getTime() : 0
+                const bPaid = b.last_paid_date ? new Date(b.last_paid_date).getTime() : 0
+                comparison = aPaid - bPaid
+                break
+        }
+        return sortDirection === 'asc' ? comparison : -comparison
+    })
+
+    const handleSort = (column: 'name' | 'amount' | 'due' | 'paid') => {
+        if (sortColumn === column) {
+            setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')
+        } else {
+            setSortColumn(column)
+            setSortDirection('asc')
+        }
+    }
 
     const overdueCount = payables.filter(p => new Date(p.next_due) < today && p.bill_status !== 'paid').length
 
@@ -406,6 +497,19 @@ export default function AccountsPayablePage() {
                 <>
                     {/* Filters */}
                     <div className="flex items-center gap-4 flex-wrap">
+                        {/* Search */}
+                        <div className="relative">
+                            <input
+                                type="text"
+                                placeholder="Search bills..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="pl-9 pr-3 py-1.5 rounded-lg text-sm bg-zinc-900 border border-zinc-700 text-white placeholder:text-zinc-500 focus:outline-none focus:border-zinc-500 w-48"
+                            />
+                            <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                        </div>
                         <div className="flex items-center gap-2">
                             {(['all', 'overdue', 'due-soon', 'scheduled', 'paid'] as const).map(f => (
                                 <button
@@ -500,114 +604,205 @@ export default function AccountsPayablePage() {
                                 <p className="text-muted-foreground italic text-sm">No payables found.</p>
                             </div>
                         ) : (
-                            <Card className="border-zinc-800 bg-zinc-950/50">
-                                <CardContent className="p-0">
-                                    <Table>
-                                        <TableHeader>
-                                            <TableRow className="border-zinc-800 hover:bg-transparent">
-                                                <TableHead className="text-zinc-400 text-xs uppercase w-20">Status</TableHead>
-                                                <TableHead className="text-zinc-400 text-xs uppercase">Payee</TableHead>
-                                                <TableHead className="text-zinc-400 text-xs uppercase w-32 hidden lg:table-cell">Category</TableHead>
-                                                <TableHead className="text-zinc-400 text-xs uppercase text-right w-20">Amount</TableHead>
-                                                <TableHead className="text-zinc-400 text-xs uppercase w-24">Due</TableHead>
-                                                <TableHead className="text-zinc-400 text-xs uppercase w-24">Paid</TableHead>
-                                                <TableHead className="text-zinc-400 text-xs uppercase w-20 hidden md:table-cell">Linked</TableHead>
-                                                <TableHead className="text-zinc-400 text-xs uppercase text-right w-24">Actions</TableHead>
-                                            </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {filteredPayables.map((p) => (
-                                                <TableRow
-                                                    key={p.id}
-                                                    className="border-zinc-800 hover:bg-zinc-900/50 cursor-pointer"
-                                                    onClick={() => openDetailModal(p)}
-                                                >
-                                                    <TableCell>{getStatusBadge(p)}</TableCell>
-                                                    <TableCell>
-                                                        <div className="flex items-center gap-2">
-                                                            {getPayeeIcon(p.payee_type)}
-                                                            <div>
-                                                                <p className="font-medium text-white">{p.name}</p>
-                                                                <p className="text-[10px] text-zinc-500">
-                                                                    {p.payee_type === 'vendor' && p.vendors?.name}
-                                                                    {p.payee_type === 'staff' && p.staff?.name}
-                                                                    {p.payee_type === 'system' && 'System Generated'}
-                                                                </p>
-                                                            </div>
-                                                            {p.auto_pay && (
-                                                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 font-medium flex items-center gap-0.5">
-                                                                    <Zap className="h-2.5 w-2.5" /> AUTO
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell className="text-zinc-400 text-xs hidden lg:table-cell">{p.categories?.name || '-'}</TableCell>
-                                                    <TableCell className="text-right">
-                                                        <span className="font-bold text-white tabular-nums">£{p.amount.toFixed(2)}</span>
-                                                        {p.amount_tax > 0 && <p className="text-[10px] text-zinc-500">+£{p.amount_tax.toFixed(2)} VAT</p>}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <span className="text-xs text-zinc-300">
-                                                            {new Date(p.next_due).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                            <>
+                                {/* Bulk Action Bar */}
+                                {selectedIds.size > 0 && (
+                                    <div className="mb-4 p-3 bg-sky-900/30 border border-sky-800 rounded-lg flex items-center justify-between">
+                                        <span className="text-sm text-sky-300">
+                                            {selectedIds.size} bill{selectedIds.size > 1 ? 's' : ''} selected
+                                        </span>
+                                        <div className="flex items-center gap-2">
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() => setSelectedIds(new Set())}
+                                                className="border-zinc-700 text-zinc-400 hover:text-white"
+                                            >
+                                                Clear Selection
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="destructive"
+                                                onClick={handleBulkDelete}
+                                                disabled={isDeleting}
+                                                className="bg-rose-600 hover:bg-rose-700"
+                                            >
+                                                {isDeleting ? (
+                                                    <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Deleting...</>
+                                                ) : (
+                                                    <><Trash2 className="h-4 w-4 mr-2" /> Delete Selected</>
+                                                )}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
+                                <Card className="border-zinc-800 bg-zinc-950/50">
+                                    <CardContent className="p-0">
+                                        <Table>
+                                            <TableHeader>
+                                                <TableRow className="border-zinc-800 hover:bg-transparent">
+                                                    <TableHead className="w-10">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={selectedIds.size > 0 && selectedIds.size === sortedPayables.length}
+                                                            onChange={toggleSelectAll}
+                                                            className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-zinc-950 cursor-pointer"
+                                                        />
+                                                    </TableHead>
+                                                    <TableHead className="text-zinc-400 text-xs uppercase w-20">Status</TableHead>
+                                                    <TableHead
+                                                        className="text-zinc-400 text-xs uppercase cursor-pointer hover:text-white transition-colors"
+                                                        onClick={() => handleSort('name')}
+                                                    >
+                                                        <span className="flex items-center gap-1">
+                                                            Payee
+                                                            {sortColumn === 'name' && (sortDirection === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
                                                         </span>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {p.last_paid_date ? (
-                                                            <span className="text-xs text-emerald-400">
-                                                                {new Date(p.last_paid_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
-                                                            </span>
-                                                        ) : (
-                                                            <span className="text-xs text-zinc-600">-</span>
-                                                        )}
-                                                    </TableCell>
-                                                    <TableCell className="hidden md:table-cell">
-                                                        {p.linked_transaction_id ? (
-                                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-medium">
-                                                                Linked
-                                                            </span>
-                                                        ) : (
-                                                            <span className="text-[10px] text-zinc-600">-</span>
-                                                        )}
-                                                    </TableCell>
-                                                    <TableCell className="text-right">
-                                                        <div className="flex items-center justify-end gap-1">
-                                                            {p.bill_status !== 'paid' && !p.linked_transaction_id && (
+                                                    </TableHead>
+                                                    <TableHead className="text-zinc-400 text-xs uppercase w-32 hidden lg:table-cell">Category</TableHead>
+                                                    <TableHead
+                                                        className="text-zinc-400 text-xs uppercase text-right w-24 cursor-pointer hover:text-white transition-colors"
+                                                        onClick={() => handleSort('amount')}
+                                                    >
+                                                        <span className="flex items-center justify-end gap-1">
+                                                            Amount
+                                                            {sortColumn === 'amount' && (sortDirection === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                                                        </span>
+                                                    </TableHead>
+                                                    <TableHead
+                                                        className="text-zinc-400 text-xs uppercase w-24 cursor-pointer hover:text-white transition-colors"
+                                                        onClick={() => handleSort('due')}
+                                                    >
+                                                        <span className="flex items-center gap-1">
+                                                            Due
+                                                            {sortColumn === 'due' && (sortDirection === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                                                        </span>
+                                                    </TableHead>
+                                                    <TableHead
+                                                        className="text-zinc-400 text-xs uppercase w-24 cursor-pointer hover:text-white transition-colors"
+                                                        onClick={() => handleSort('paid')}
+                                                    >
+                                                        <span className="flex items-center gap-1">
+                                                            Paid
+                                                            {sortColumn === 'paid' && (sortDirection === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                                                        </span>
+                                                    </TableHead>
+                                                    <TableHead className="text-zinc-400 text-xs uppercase w-20 hidden md:table-cell">Linked</TableHead>
+                                                    <TableHead className="text-zinc-400 text-xs uppercase text-right w-24">Actions</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {sortedPayables.map((p) => (
+                                                    <TableRow
+                                                        key={p.id}
+                                                        className={`border-zinc-800 hover:bg-zinc-900/50 cursor-pointer ${selectedIds.has(p.id) ? 'bg-sky-900/20' : ''}`}
+                                                        onClick={() => openDetailModal(p)}
+                                                    >
+                                                        <TableCell>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selectedIds.has(p.id)}
+                                                                onClick={(e) => toggleSelection(p.id, e)}
+                                                                onChange={() => { }}
+                                                                className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-zinc-950 cursor-pointer"
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell>{getStatusBadge(p)}</TableCell>
+                                                        <TableCell>
+                                                            <div className="flex items-center gap-2">
+                                                                {getPayeeIcon(p.payee_type)}
+                                                                <div>
+                                                                    <p className="font-medium text-white">{p.name}</p>
+                                                                    <p className="text-[10px] text-zinc-500">
+                                                                        {p.payee_type === 'vendor' && p.vendors?.name}
+                                                                        {p.payee_type === 'staff' && p.staff?.name}
+                                                                        {p.payee_type === 'system' && 'System Generated'}
+                                                                    </p>
+                                                                </div>
+                                                                {p.auto_pay && (
+                                                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 font-medium flex items-center gap-0.5">
+                                                                        <Zap className="h-2.5 w-2.5" /> AUTO
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-zinc-400 text-xs hidden lg:table-cell">{p.categories?.name || '-'}</TableCell>
+                                                        <TableCell className="text-right">
+                                                            {(p.amount_paid ?? 0) > 0 && (p.amount_paid ?? 0) < p.amount ? (
                                                                 <>
-                                                                    <button onClick={() => handleMarkPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Mark Paid">
-                                                                        <CheckCircle2 className="h-4 w-4" />
-                                                                    </button>
-                                                                    <button onClick={() => openLinkModal(p)} className="p-2 text-zinc-500 hover:text-sky-400" title="Link Transaction">
-                                                                        <Link2 className="h-4 w-4" />
-                                                                    </button>
+                                                                    <span className="font-bold text-amber-400 tabular-nums">£{(p.amount - (p.amount_paid ?? 0)).toFixed(2)}</span>
+                                                                    <p className="text-[10px] text-zinc-500">of £{p.amount.toFixed(2)}</p>
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <span className="font-bold text-white tabular-nums">£{p.amount.toFixed(2)}</span>
+                                                                    {p.amount_tax > 0 && <p className="text-[10px] text-zinc-500">+£{p.amount_tax.toFixed(2)} VAT</p>}
                                                                 </>
                                                             )}
-                                                            {/* Link button for paid items without linked transaction (retroactive linking) */}
-                                                            {p.bill_status === 'paid' && !p.linked_transaction_id && (
-                                                                <button onClick={() => openLinkModalForPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Link to Transaction (Retroactive)">
-                                                                    <Link2 className="h-4 w-4" />
-                                                                </button>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <span className="text-xs text-zinc-300">
+                                                                {new Date(p.next_due).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                                                            </span>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {p.last_paid_date ? (
+                                                                <span className="text-xs text-emerald-400">
+                                                                    {new Date(p.last_paid_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-xs text-zinc-600">-</span>
                                                             )}
-                                                            {p.bill_status === 'paid' && (
-                                                                <button onClick={() => handleMarkUnpaid(p)} className="p-2 text-zinc-500 hover:text-rose-500" title="Mark Unpaid">
-                                                                    <AlertCircle className="h-4 w-4" />
-                                                                </button>
+                                                        </TableCell>
+                                                        <TableCell className="hidden md:table-cell">
+                                                            {p.linked_transaction_id ? (
+                                                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-medium">
+                                                                    Linked
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-[10px] text-zinc-600">-</span>
                                                             )}
-                                                            <button onClick={() => handleOpenModal(p)} className="p-2 text-zinc-500 hover:text-white" title="Edit">
-                                                                <Pencil className="h-4 w-4" />
-                                                            </button>
-                                                            {!p.is_system_generated && (
-                                                                <button onClick={() => handleDelete(p.id)} className="p-2 text-zinc-500 hover:text-rose-500" title="Delete">
-                                                                    <Trash2 className="h-4 w-4" />
+                                                        </TableCell>
+                                                        <TableCell className="text-right">
+                                                            <div className="flex items-center justify-end gap-1">
+                                                                {p.bill_status !== 'paid' && !p.linked_transaction_id && (
+                                                                    <>
+                                                                        <button onClick={() => handleMarkPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Mark Paid">
+                                                                            <CheckCircle2 className="h-4 w-4" />
+                                                                        </button>
+                                                                        <button onClick={() => openLinkModal(p)} className="p-2 text-zinc-500 hover:text-sky-400" title="Link Transaction">
+                                                                            <Link2 className="h-4 w-4" />
+                                                                        </button>
+                                                                    </>
+                                                                )}
+                                                                {/* Link button for paid items without linked transaction (retroactive linking) */}
+                                                                {p.bill_status === 'paid' && !p.linked_transaction_id && (
+                                                                    <button onClick={() => openLinkModalForPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Link to Transaction (Retroactive)">
+                                                                        <Link2 className="h-4 w-4" />
+                                                                    </button>
+                                                                )}
+                                                                {p.bill_status === 'paid' && (
+                                                                    <button onClick={() => handleMarkUnpaid(p)} className="p-2 text-zinc-500 hover:text-rose-500" title="Mark Unpaid">
+                                                                        <AlertCircle className="h-4 w-4" />
+                                                                    </button>
+                                                                )}
+                                                                <button onClick={() => handleOpenModal(p)} className="p-2 text-zinc-500 hover:text-white" title="Edit">
+                                                                    <Pencil className="h-4 w-4" />
                                                                 </button>
-                                                            )}
-                                                        </div>
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))}
-                                        </TableBody>
-                                    </Table>
-                                </CardContent>
-                            </Card>
+                                                                {!p.is_system_generated && (
+                                                                    <button onClick={() => handleDelete(p.id)} className="p-2 text-zinc-500 hover:text-rose-500" title="Delete">
+                                                                        <Trash2 className="h-4 w-4" />
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))}
+                                            </TableBody>
+                                        </Table>
+                                    </CardContent>
+                                </Card>
+                            </>
                         )
                     ) : (
                         /* Calendar View */
@@ -1026,13 +1221,35 @@ export default function AccountsPayablePage() {
                                     </p>
                                 </div>
                                 <div className="text-right">
-                                    <p className="text-[10px] uppercase text-zinc-500 font-bold">Amount</p>
+                                    <p className="text-[10px] uppercase text-zinc-500 font-bold">Amount Due</p>
                                     <p className="text-xl font-bold text-white">£{selectedPayable.amount.toFixed(2)}</p>
                                     {selectedPayable.amount_tax > 0 && (
                                         <p className="text-xs text-zinc-400">+£{selectedPayable.amount_tax.toFixed(2)} VAT</p>
                                     )}
                                 </div>
                             </div>
+
+                            {/* Partial Payment Progress */}
+                            {(selectedPayable.amount_paid ?? 0) > 0 && (
+                                <div className="bg-zinc-900 rounded-lg p-3 border border-zinc-800">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-xs text-zinc-400">Payment Progress</span>
+                                        <span className="text-xs font-medium text-emerald-400">
+                                            {Math.round(((selectedPayable.amount_paid ?? 0) / selectedPayable.amount) * 100)}% paid
+                                        </span>
+                                    </div>
+                                    <div className="h-2 bg-zinc-800 rounded-full overflow-hidden mb-2">
+                                        <div
+                                            className="h-full bg-emerald-500 rounded-full transition-all"
+                                            style={{ width: `${Math.min(((selectedPayable.amount_paid ?? 0) / selectedPayable.amount) * 100, 100)}%` }}
+                                        />
+                                    </div>
+                                    <div className="flex justify-between text-xs">
+                                        <span className="text-emerald-400">£{(selectedPayable.amount_paid ?? 0).toFixed(2)} paid</span>
+                                        <span className="text-amber-400">£{(selectedPayable.amount - (selectedPayable.amount_paid ?? 0)).toFixed(2)} remaining</span>
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="grid grid-cols-3 gap-4">
                                 <div>
@@ -1080,11 +1297,25 @@ export default function AccountsPayablePage() {
                                             <div>
                                                 <p className="text-sm font-medium text-white">{linkedTransaction.raw_party || linkedTransaction.description}</p>
                                                 <p className="text-xs text-zinc-400">
-                                                    {new Date(linkedTransaction.transaction_date).toLocaleDateString('en-GB')} • {linkedTransaction.categories?.name || 'Uncategorized'}
+                                                    {new Date(linkedTransaction.transaction_date).toLocaleDateString('en-GB')} • {linkedTransaction.description}
                                                 </p>
                                             </div>
                                             <p className="text-sm font-bold text-emerald-400">£{Math.abs(linkedTransaction.amount).toFixed(2)}</p>
                                         </div>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="mt-3 w-full border-rose-800 text-rose-400 hover:bg-rose-900/30"
+                                            onClick={async () => {
+                                                if (!confirm("Unlink this transaction? The bill will be marked as unpaid.")) return
+                                                await unlinkPayableFromTransaction(selectedPayable.id)
+                                                setDetailModalOpen(false)
+                                                setSelectedPayable(null)
+                                                fetchData()
+                                            }}
+                                        >
+                                            <X className="h-4 w-4 mr-2" /> Unlink Transaction
+                                        </Button>
                                     </div>
                                 ) : (
                                     <div className="text-zinc-500 text-sm italic">

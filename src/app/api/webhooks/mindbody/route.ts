@@ -1,55 +1,153 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createClient } from "@/lib/supabase/server"
+import { createServiceClient } from "@/lib/supabase/server"
+import { logger } from "@/lib/logger"
+import { logApiCall } from "@/lib/actions/api-logs"
 
 /**
  * Mindbody Webhook Handler
  * 
  * Listens for:
- * - clientMembershipAssignment.cancelled
- * - client.updated (for decline detection)
+ * - client.created (new member)
+ * - client.updated (profile changes, decline detection)
+ * - clientProfileMerger.created (merged clients)
+ * - clientMembershipAssignment.created (new membership)
+ * - clientMembershipAssignment.cancelled (cancelled membership)
+ * - clientSale.created (payment made)
  * 
  * POST /api/webhooks/mindbody
  */
 
 // Event types we handle
 type MindbodyEvent =
-    | "clientMembershipAssignment.cancelled"
+    | "client.created"
     | "client.updated"
-    | "sale.created"
+    | "clientProfileMerger.created"
+    | "clientMembershipAssignment.created"
+    | "clientMembershipAssignment.cancelled"
+    | "clientSale.created"
+    | "sale.created" // Legacy event name
 
 interface WebhookPayload {
-    eventType: MindbodyEvent
+    messageId?: string
+    eventId?: string
+    eventSchemaVersion?: string
+    eventInstanceOriginationDateTime?: string
+    eventData?: {
+        siteId?: number
+        clientId?: string
+        clientUniqueId?: number
+        // For merge events
+        winnerClientId?: string
+        loserClientId?: string
+        mergeDateTime?: string
+        // For membership events
+        membershipId?: string
+        // For sale events
+        saleId?: string
+        // Generic data
+        [key: string]: any
+    }
+    // Legacy format support
+    eventType?: string
     clientId?: string
     membershipId?: string
     data?: any
     timestamp?: string
 }
 
-export async function POST(request: NextRequest) {
-    try {
-        const payload: WebhookPayload = await request.json()
-        const { eventType, clientId, membershipId, data } = payload
+// Get user_id from existing members (for multi-tenant support)
+async function getDefaultUserId(supabase: any): Promise<string | null> {
+    const { data } = await supabase
+        .from('mb_members')
+        .select('user_id')
+        .limit(1)
+        .single()
 
-        // Verify webhook signature (if Mindbody provides one)
+    return data?.user_id || null
+}
+
+export async function POST(request: NextRequest) {
+    const startTime = Date.now()
+    let eventType: string | undefined
+    let payload: WebhookPayload | undefined
+
+    try {
+        payload = await request.json()
+
+        // Support both new format (eventId) and legacy format (eventType)
+        eventType = payload.eventId || payload.eventType
+        const eventData = payload.eventData || payload.data || {}
+        const clientId = eventData.clientId?.toString() ||
+            eventData.clientUniqueId?.toString() ||
+            payload.clientId
+
+        logger.info('WEBHOOK', 'Received Mindbody event', { eventType, clientId })
+
+        // Verify webhook signature
         const signature = request.headers.get("x-mindbody-signature")
-        // TODO: Implement signature verification when Mindbody provides docs
+        if (process.env.MINDBODY_WEBHOOK_SECRET && signature) {
+            // TODO: Implement HMAC signature verification
+        }
+
+        let response: NextResponse
 
         // Route to handler
         switch (eventType) {
-            case "clientMembershipAssignment.cancelled":
-                return handleMembershipCancelled(clientId, membershipId, data)
+            case "client.created":
+                response = await handleClientCreated(clientId, eventData)
+                break
 
             case "client.updated":
-                return handleClientUpdated(clientId, data)
+                response = await handleClientUpdated(clientId, eventData)
+                break
 
+            case "clientProfileMerger.created":
+                response = await handleClientMerged(eventData)
+                break
+
+            case "clientMembershipAssignment.created":
+                response = await handleMembershipCreated(clientId, eventData)
+                break
+
+            case "clientMembershipAssignment.cancelled":
+                response = await handleMembershipCancelled(clientId, eventData.membershipId, eventData)
+                break
+
+            case "clientSale.created":
             case "sale.created":
-                return handleSaleCreated(data)
+                response = await handleSaleCreated(eventData)
+                break
 
             default:
-                return NextResponse.json({ received: true, handled: false })
+                logger.info('WEBHOOK', 'Unhandled event type', { eventType })
+                response = NextResponse.json({ received: true, handled: false, eventType })
         }
-    } catch (error) {
-        console.error("Webhook error:", error)
+
+        // Log successful webhook
+        logApiCall({
+            logType: 'webhook',
+            source: 'mindbody',
+            eventType: eventType || 'unknown',
+            status: 'success',
+            requestData: payload,
+            durationMs: Date.now() - startTime
+        })
+
+        return response
+    } catch (error: any) {
+        logger.error('WEBHOOK', 'Webhook processing failed', { error: error.message })
+
+        // Log failed webhook
+        logApiCall({
+            logType: 'webhook',
+            source: 'mindbody',
+            eventType: eventType || 'unknown',
+            status: 'error',
+            requestData: payload,
+            errorMessage: error.message,
+            durationMs: Date.now() - startTime
+        })
+
         return NextResponse.json(
             { error: "Webhook processing failed" },
             { status: 500 }
@@ -57,42 +155,60 @@ export async function POST(request: NextRequest) {
     }
 }
 
-// Handler: Membership Cancelled
-async function handleMembershipCancelled(
+// ============================================
+// HANDLER: Client Created (New Member)
+// ============================================
+async function handleClientCreated(
     clientId?: string,
-    membershipId?: string,
     data?: any
 ): Promise<NextResponse> {
-    if (!clientId || !membershipId) {
-        return NextResponse.json({ error: "Missing clientId or membershipId" }, { status: 400 })
+    if (!clientId) {
+        return NextResponse.json({ error: "Missing clientId" }, { status: 400 })
     }
 
-    const supabase = await createClient()
+    const supabase = createServiceClient()
 
-    // Update membership status in our database
-    await supabase
-        .from("mb_memberships")
-        .update({
-            status: "Terminated",
-            termination_date: new Date().toISOString().split("T")[0],
-            at_risk: false,
-            synced_at: new Date().toISOString(),
+    // Get user_id from existing members
+    const userId = await getDefaultUserId(supabase)
+    if (!userId) {
+        return NextResponse.json({
+            received: true,
+            handled: false,
+            error: "No existing members found to determine user_id"
         })
-        .eq("mb_membership_id", membershipId)
+    }
 
-    // Update member record if exists
-    await supabase
-        .from("mb_members")
-        .update({
-            membership_status: "Terminated",
-            synced_at: new Date().toISOString(),
-        })
-        .eq("mb_client_id", clientId)
+    // Insert new member (upsert to avoid duplicates)
+    const { error } = await supabase.from("mb_members").upsert({
+        user_id: userId,
+        mb_client_id: clientId,
+        first_name: data?.FirstName || data?.firstName,
+        last_name: data?.LastName || data?.lastName,
+        email: data?.Email || data?.email,
+        phone: data?.MobilePhone || data?.HomePhone || data?.mobilePhone,
+        mobile_phone: data?.MobilePhone || data?.mobilePhone,
+        gender: data?.Gender || data?.gender,
+        birth_date: data?.BirthDate || data?.birthDate,
+        address_line1: data?.AddressLine1 || data?.addressLine1,
+        city: data?.City || data?.city,
+        postal_code: data?.PostalCode || data?.postalCode,
+        membership_status: "New",
+        join_date: new Date().toISOString().split("T")[0],
+        synced_at: new Date().toISOString(),
+    }, { onConflict: 'mb_client_id,user_id' })
 
-    return NextResponse.json({ received: true, handled: true, action: "membership_cancelled" })
+    if (error) {
+        logger.error('WEBHOOK', 'Failed to create member', { clientId, error: error.message })
+        return NextResponse.json({ received: true, handled: false, error: error.message })
+    }
+
+    logger.info('WEBHOOK', 'Member created', { clientId })
+    return NextResponse.json({ received: true, handled: true, action: "client_created", clientId })
 }
 
-// Handler: Client Updated (for decline detection)
+// ============================================
+// HANDLER: Client Updated
+// ============================================
 async function handleClientUpdated(
     clientId?: string,
     data?: any
@@ -101,66 +217,200 @@ async function handleClientUpdated(
         return NextResponse.json({ error: "Missing clientId" }, { status: 400 })
     }
 
-    const supabase = await createClient()
-    const newStatus = data?.Status || data?.status
+    const supabase = createServiceClient()
 
-    // Update member status
-    if (newStatus) {
-        await supabase
-            .from("mb_members")
-            .update({
-                membership_status: newStatus,
-                synced_at: new Date().toISOString(),
-            })
-            .eq("mb_client_id", clientId)
+    // Build update object with only provided fields
+    const updates: Record<string, any> = {
+        synced_at: new Date().toISOString()
     }
 
-    return NextResponse.json({ received: true, handled: true, action: "client_updated" })
+    // Map possible field names
+    if (data?.FirstName || data?.firstName) updates.first_name = data.FirstName || data.firstName
+    if (data?.LastName || data?.lastName) updates.last_name = data.LastName || data.lastName
+    if (data?.Email || data?.email) updates.email = data.Email || data.email
+    if (data?.MobilePhone || data?.mobilePhone) updates.mobile_phone = data.MobilePhone || data.mobilePhone
+    if (data?.HomePhone || data?.homePhone) updates.home_phone = data.HomePhone || data.homePhone
+    if (data?.Gender || data?.gender) updates.gender = data.Gender || data.gender
+    if (data?.BirthDate || data?.birthDate) updates.birth_date = data.BirthDate || data.birthDate
+    if (data?.Status || data?.status) updates.membership_status = data.Status || data.status
+    if (data?.PhotoUrl || data?.photoUrl) updates.photo_url = data.PhotoUrl || data.photoUrl
+
+    await supabase
+        .from("mb_members")
+        .update(updates)
+        .eq("mb_client_id", clientId)
+
+    logger.info('WEBHOOK', 'Member updated', { clientId, fields: Object.keys(updates) })
+    return NextResponse.json({ received: true, handled: true, action: "client_updated", clientId })
 }
 
-// Handler: Sale Created - insert transaction in real-time
+// ============================================
+// HANDLER: Client Merged
+// ============================================
+async function handleClientMerged(data?: any): Promise<NextResponse> {
+    // Mindbody sends winnerClientId and loserClientId (or similar)
+    const winnerId = data?.winnerClientId?.toString() ||
+        data?.WinnerClientId?.toString() ||
+        data?.targetClientId?.toString()
+    const loserId = data?.loserClientId?.toString() ||
+        data?.LoserClientId?.toString() ||
+        data?.sourceClientId?.toString()
+
+    if (!winnerId || !loserId) {
+        logger.warn('WEBHOOK', 'Merge event missing client IDs', { data })
+        return NextResponse.json({ error: "Missing winner or loser clientId" }, { status: 400 })
+    }
+
+    const supabase = createServiceClient()
+
+    // Mark the loser as merged (soft delete)
+    const { error } = await supabase
+        .from("mb_members")
+        .update({
+            is_merged: true,
+            merged_into_id: winnerId,
+            merged_at: data?.mergeDateTime || new Date().toISOString(),
+            synced_at: new Date().toISOString()
+        })
+        .eq("mb_client_id", loserId)
+
+    if (error) {
+        logger.error('WEBHOOK', 'Failed to mark member as merged', { loserId, winnerId, error: error.message })
+        return NextResponse.json({ received: true, handled: false, error: error.message })
+    }
+
+    logger.info('WEBHOOK', 'Member merged', { loserId, winnerId })
+    return NextResponse.json({
+        received: true,
+        handled: true,
+        action: "client_merged",
+        loserId,
+        winnerId
+    })
+}
+
+// ============================================
+// HANDLER: Membership Created
+// ============================================
+async function handleMembershipCreated(
+    clientId?: string,
+    data?: any
+): Promise<NextResponse> {
+    if (!clientId) {
+        return NextResponse.json({ error: "Missing clientId" }, { status: 400 })
+    }
+
+    const supabase = createServiceClient()
+
+    // Update member status to Active
+    await supabase
+        .from("mb_members")
+        .update({
+            membership_status: "Active",
+            membership_name: data?.MembershipName || data?.membershipName,
+            synced_at: new Date().toISOString()
+        })
+        .eq("mb_client_id", clientId)
+
+    logger.info('WEBHOOK', 'Membership created', { clientId })
+    return NextResponse.json({ received: true, handled: true, action: "membership_created", clientId })
+}
+
+// ============================================
+// HANDLER: Membership Cancelled
+// ============================================
+async function handleMembershipCancelled(
+    clientId?: string,
+    membershipId?: string,
+    data?: any
+): Promise<NextResponse> {
+    if (!clientId) {
+        return NextResponse.json({ error: "Missing clientId" }, { status: 400 })
+    }
+
+    const supabase = createServiceClient()
+
+    // Update membership if we track it
+    if (membershipId) {
+        await supabase
+            .from("mb_memberships")
+            .update({
+                status: "Terminated",
+                termination_date: new Date().toISOString().split("T")[0],
+                at_risk: false,
+                synced_at: new Date().toISOString(),
+            })
+            .eq("mb_membership_id", membershipId)
+    }
+
+    // Update member status
+    await supabase
+        .from("mb_members")
+        .update({
+            membership_status: "Terminated",
+            synced_at: new Date().toISOString(),
+        })
+        .eq("mb_client_id", clientId)
+
+    logger.info('WEBHOOK', 'Membership cancelled', { clientId, membershipId })
+    return NextResponse.json({ received: true, handled: true, action: "membership_cancelled", clientId })
+}
+
+// ============================================
+// HANDLER: Sale Created
+// ============================================
 async function handleSaleCreated(data?: any): Promise<NextResponse> {
     if (!data) {
         return NextResponse.json({ error: "Missing sale data" }, { status: 400 })
     }
 
-    const supabase = await createClient()
-    const saleId = data.SaleId?.toString() || data.Id?.toString()
+    const supabase = createServiceClient()
+    const saleId = data.SaleId?.toString() || data.saleId?.toString() || data.Id?.toString()
+    const clientId = data.ClientId?.toString() || data.clientId?.toString()
 
-    console.log("[WEBHOOK] Sale created:", saleId)
+    logger.info('WEBHOOK', 'Sale created', { saleId, clientId })
 
     // Upsert the transaction
     const { error } = await supabase.from('mb_transactions').upsert({
         mb_sale_id: saleId,
         mb_transaction_id: data.TransactionId?.toString() || saleId,
-        mb_client_id: data.ClientId?.toString(),
-        gross_amount: data.GrossAmount || data.Amount || 0,
-        net_amount: data.NetAmount || data.Amount || 0,
-        payment_type: data.PaymentType || data.Method || '',
-        status: data.Status || 'Approved',
-        description: data.Description || data.ItemName,
-        transaction_date: data.SaleDateTime || data.TransactionTime || new Date().toISOString(),
+        mb_client_id: clientId,
+        gross_amount: data.GrossAmount || data.grossAmount || data.Amount || 0,
+        net_amount: data.NetAmount || data.netAmount || data.Amount || 0,
+        payment_type: data.PaymentType || data.paymentType || data.Method || '',
+        status: data.Status || data.status || 'Approved',
+        description: data.Description || data.description || data.ItemName,
+        transaction_date: data.SaleDateTime || data.saleDateTime || data.TransactionTime || new Date().toISOString(),
         synced_at: new Date().toISOString(),
     }, {
         onConflict: 'mb_transaction_id'
     })
 
     if (error) {
-        console.error("[WEBHOOK] Sale upsert error:", error.message)
+        logger.error('WEBHOOK', 'Sale upsert error', { saleId, error: error.message })
         return NextResponse.json({ received: true, handled: false, error: error.message })
     }
 
     return NextResponse.json({ received: true, handled: true, action: "sale_synced", saleId })
 }
 
-// GET for webhook verification (some providers require this)
+// ============================================
+// HEAD/GET for webhook verification
+// ============================================
+export async function HEAD() {
+    return new NextResponse(null, { status: 200 })
+}
+
 export async function GET() {
     return NextResponse.json({
         status: "Mindbody webhook endpoint active",
         events: [
-            "clientMembershipAssignment.cancelled",
+            "client.created",
             "client.updated",
-            "sale.created"
+            "clientProfileMerger.created",
+            "clientMembershipAssignment.created",
+            "clientMembershipAssignment.cancelled",
+            "clientSale.created"
         ]
     })
 }

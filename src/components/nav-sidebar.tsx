@@ -48,6 +48,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { ModeToggle } from "@/components/mode-toggle"
 
 const data = {
   user: {
@@ -173,12 +174,14 @@ export function AppSidebar() {
   return (
     <Sidebar variant="inset">
       <SidebarHeader className="h-16 border-b border-sidebar-border px-6 flex flex-row items-center gap-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-black text-white dark:bg-white dark:text-black font-bold text-xl">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-xl">
           L
         </div>
-        <div className="flex flex-col">
+        <div className="flex flex-col gap-0.5">
           <span className="font-semibold text-sm leading-none">Legion Finance</span>
-          <span className="text-[10px] text-muted-foreground uppercase tracking-widest mt-1">Academy Portal</span>
+        </div>
+        <div className="ml-auto">
+          <ModeToggle />
         </div>
       </SidebarHeader>
       <SidebarContent className="px-3 pt-6">

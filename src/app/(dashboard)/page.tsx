@@ -31,6 +31,8 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { createClient } from "@/lib/supabase/client"
 import Link from "next/link"
+import { StatCard } from "@/components/dashboard/stat-card"
+import { getInFlightCash } from "@/lib/actions/in-flight-cash"
 
 interface DashboardStats {
     bankBalance: number
@@ -48,6 +50,8 @@ interface DashboardStats {
     billsDueThisWeek: number
     overdueInvoices: number
     lastSyncDays: number
+    inFlightCash: number
+    inFlightCount: number
 }
 
 interface UpcomingPayment {
@@ -93,6 +97,8 @@ export default function DashboardPage() {
         billsDueThisWeek: 0,
         overdueInvoices: 0,
         lastSyncDays: 0,
+        inFlightCash: 0,
+        inFlightCount: 0,
     })
     const [upcomingPayments, setUpcomingPayments] = React.useState<UpcomingPayment[]>([])
     const [recentTransactions, setRecentTransactions] = React.useState<RecentTransaction[]>([])
@@ -245,6 +251,9 @@ export default function DashboardPage() {
         }
         setForecast(forecastWeeks)
 
+        // Fetch in-flight cash (money collected but not yet deposited)
+        const inFlight = await getInFlightCash()
+
         setStats({
             bankBalance,
             thisMonthIncome,
@@ -261,6 +270,8 @@ export default function DashboardPage() {
             billsDueThisWeek: billsDueCount || 0,
             overdueInvoices: 0,
             lastSyncDays: 0,
+            inFlightCash: inFlight?.inFlight || 0,
+            inFlightCount: 0, // Not tracking count anymore
         })
 
         setIsLoading(false)
@@ -283,7 +294,7 @@ export default function DashboardPage() {
     const dangerThreshold = 2000
 
     return (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-4 md:gap-6">
             {/* Header Section */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
@@ -305,142 +316,90 @@ export default function DashboardPage() {
 
             {/* Row 1: Financial Metrics */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <Card className="shadow-sm border-slate-200 dark:border-zinc-800 transition-all hover:shadow-md">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Bank Balance</CardTitle>
-                        <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 border-none font-bold text-[10px]">LIVE</Badge>
-                    </CardHeader>
-                    <CardContent>
-                        <div className={`text-2xl font-black tabular-nums font-mono ${stats.bankBalance >= 0 ? '' : 'text-red-600'}`}>
-                            £{formatCurrency(stats.bankBalance)}
-                        </div>
-                        <p className="text-[10px] uppercase font-bold text-muted-foreground mt-1">
-                            All Accounts Total
-                        </p>
-                    </CardContent>
-                </Card>
+                <StatCard
+                    title="Bank Balance"
+                    value={formatCurrency(stats.bankBalance)}
+                    valuePrefix="£"
+                    badgeText="LIVE"
+                    status={stats.bankBalance >= 0 ? "neutral" : "danger"}
+                    subtext="All Accounts Total"
+                />
 
-                <Card className="shadow-sm border-slate-200 dark:border-zinc-800 transition-all hover:shadow-md">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">This Month Income</CardTitle>
-                        <div className="h-8 w-8 rounded-full bg-emerald-50 dark:bg-emerald-950/30 flex items-center justify-center">
-                            <ArrowUpRight className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black tabular-nums font-mono text-emerald-600">
-                            +£{formatCurrency(stats.thisMonthIncome)}
-                        </div>
-                        <p className="text-[10px] uppercase font-bold text-muted-foreground mt-1">
-                            vs {new Date().toLocaleString('default', { month: 'short' })} previous
-                        </p>
-                    </CardContent>
-                </Card>
+                <StatCard
+                    title="This Month Income"
+                    value={formatCurrency(stats.thisMonthIncome)}
+                    valuePrefix="+£"
+                    icon={ArrowUpRight}
+                    status="success"
+                    subtext={`vs ${new Date().toLocaleString('default', { month: 'short' })} previous`}
+                />
 
-                <Card className="shadow-sm border-slate-200 dark:border-zinc-800 transition-all hover:shadow-md">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">This Month Expenses</CardTitle>
-                        <div className="h-8 w-8 rounded-full bg-rose-50 dark:bg-rose-950/30 flex items-center justify-center">
-                            <ArrowDownRight className="h-4 w-4 text-rose-600 dark:text-rose-400" />
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black tabular-nums font-mono text-red-600">
-                            -£{formatCurrency(stats.thisMonthExpenses)}
-                        </div>
-                        <p className="text-[10px] uppercase font-bold text-muted-foreground mt-1">
-                            vs {new Date().toLocaleString('default', { month: 'short' })} previous
-                        </p>
-                    </CardContent>
-                </Card>
+                <StatCard
+                    title="This Month Expenses"
+                    value={formatCurrency(stats.thisMonthExpenses)}
+                    valuePrefix="-£"
+                    icon={ArrowDownRight}
+                    status="danger"
+                    subtext={`vs ${new Date().toLocaleString('default', { month: 'short' })} previous`}
+                />
 
-                <Card className="shadow-sm border-slate-200 dark:border-zinc-800 transition-all hover:shadow-md">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Net Position</CardTitle>
-                        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${stats.netPosition >= 0 ? 'bg-emerald-50 dark:bg-emerald-950/30' : 'bg-rose-50 dark:bg-rose-950/30'}`}>
-                            {stats.netPosition >= 0 ? <TrendingUp className="h-4 w-4 text-emerald-600" /> : <TrendingDown className="h-4 w-4 text-rose-600" />}
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className={`text-2xl font-black tabular-nums font-mono ${stats.netPosition >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                            {stats.netPosition >= 0 ? '+' : '-'}£{formatCurrency(stats.netPosition)}
-                        </div>
-                        <p className="text-[10px] uppercase font-bold text-muted-foreground mt-1">
-                            This month so far
-                        </p>
-                    </CardContent>
-                </Card>
+                <StatCard
+                    title="Net Position"
+                    value={formatCurrency(Math.abs(stats.netPosition))}
+                    valuePrefix={stats.netPosition >= 0 ? "+£" : "-£"}
+                    icon={stats.netPosition >= 0 ? TrendingUp : TrendingDown}
+                    status={stats.netPosition >= 0 ? "success" : "danger"}
+                    subtext="This month so far"
+                />
+
+                <StatCard
+                    title="In-Flight Cash"
+                    value={formatCurrency(stats.inFlightCash)}
+                    valuePrefix="£"
+                    icon={Clock}
+                    status="info"
+                    subtext="Collected but not deposited"
+                />
             </div>
 
             {/* Row 2: Member Metrics */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <Card className="shadow-sm border-slate-200 dark:border-zinc-800 transition-all hover:shadow-md">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Active Members</CardTitle>
-                        <div className="h-8 w-8 rounded-full bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center">
-                            <Users className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black tabular-nums font-mono">{stats.activeMembers}</div>
-                        {stats.newMembersThisMonth > 0 && (
-                            <Badge className="mt-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 border-none text-[10px]">
-                                +{stats.newMembersThisMonth} new
-                            </Badge>
-                        )}
-                    </CardContent>
-                </Card>
+                <StatCard
+                    title="Active Members"
+                    value={stats.activeMembers}
+                    icon={Users}
+                    status="info"
+                    badgeText={stats.newMembersThisMonth > 0 ? `+${stats.newMembersThisMonth} new` : undefined}
+                />
 
-                <Card className="shadow-sm border-slate-200 dark:border-zinc-800 transition-all hover:shadow-md">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Monthly MRR</CardTitle>
-                        <div className="h-8 w-8 rounded-full bg-emerald-50 dark:bg-emerald-950/30 flex items-center justify-center">
-                            <DollarSign className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black tabular-nums font-mono text-emerald-600">
-                            £{formatCurrency(stats.monthlyMRR)}
-                        </div>
-                        <p className="text-[10px] uppercase font-bold text-muted-foreground mt-1">Recurring Revenue</p>
-                    </CardContent>
-                </Card>
+                <StatCard
+                    title="Monthly MRR"
+                    value={formatCurrency(stats.monthlyMRR)}
+                    valuePrefix="£"
+                    icon={DollarSign}
+                    status="success"
+                    subtext="Recurring Revenue"
+                />
 
-                <Card className="shadow-sm border-slate-200 dark:border-zinc-800 transition-all hover:shadow-md">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Declines This Mo</CardTitle>
-                        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${stats.declinesThisMonth > 0 ? 'bg-amber-50 dark:bg-amber-950/30' : 'bg-zinc-100 dark:bg-zinc-800'}`}>
-                            <AlertTriangle className={`h-4 w-4 ${stats.declinesThisMonth > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`} />
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className={`text-2xl font-black tabular-nums font-mono ${stats.declinesThisMonth > 0 ? 'text-amber-600' : ''}`}>
-                            {stats.declinesThisMonth}
-                        </div>
-                        {stats.declinesThisMonth > 0 && (
-                            <Badge className="mt-1 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 border-none text-[10px]">
-                                Action needed
-                            </Badge>
-                        )}
-                    </CardContent>
-                </Card>
+                <StatCard
+                    title="Declines This Mo"
+                    value={stats.declinesThisMonth}
+                    icon={AlertTriangle}
+                    status={stats.declinesThisMonth > 0 ? "warning" : "neutral"}
+                    badgeText={stats.declinesThisMonth > 0 ? "Action needed" : undefined}
+                />
 
-                <Card className="shadow-sm border-slate-200 dark:border-zinc-800 transition-all hover:shadow-md">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">At Risk Churn</CardTitle>
-                        <div className="h-8 w-8 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
-                            <UserMinus className="h-4 w-4 text-muted-foreground" />
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black tabular-nums font-mono">{stats.atRiskMembers}</div>
-                        <p className="text-[10px] uppercase font-bold text-muted-foreground mt-1">35-45 day inactive</p>
-                    </CardContent>
-                </Card>
+                <StatCard
+                    title="At Risk Churn"
+                    value={stats.atRiskMembers}
+                    icon={UserMinus}
+                    status="neutral"
+                    subtext="35-45 day inactive"
+                />
             </div>
 
             {/* Row 3: Chart + Actions */}
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
+            <div className="grid gap-4 md:gap-6 md:grid-cols-2 lg:grid-cols-7">
                 <Card className="col-span-4 shadow-sm border-slate-200 dark:border-zinc-800">
                     <CardHeader>
                         <CardTitle className="text-xl font-bold">4-Week Cash Flow Forecast</CardTitle>
@@ -553,7 +512,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Row 4: Tables */}
-            <div className="grid gap-6 md:grid-cols-2">
+            <div className="grid gap-4 md:gap-6 md:grid-cols-2">
                 <Card className="shadow-sm border-slate-200 dark:border-zinc-800">
                     <CardHeader>
                         <CardTitle className="text-lg font-bold">Upcoming Payments</CardTitle>

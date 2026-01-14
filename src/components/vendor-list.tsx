@@ -158,42 +158,64 @@ export function VendorList() {
             ) : filtered.length === 0 ? (
                 <Card className="border-dashed p-8 text-center text-muted-foreground">No vendors found.</Card>
             ) : viewMode === 'list' ? (
-                <div className="border rounded-xl bg-white dark:bg-zinc-950 overflow-hidden shadow-sm">
-                    <Table>
-                        <TableHeader>
-                            <TableRow className="bg-slate-50/50 dark:bg-zinc-900/50">
-                                <TableHead className="w-10"></TableHead>
-                                <TableHead>Name</TableHead>
-                                <TableHead>ID</TableHead>
-                                <TableHead className="text-right">Actions</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {filtered.map(v => (
-                                <TableRow key={v.id}>
-                                    <TableCell><Building2 className="h-4 w-4 text-emerald-500" /></TableCell>
-                                    <TableCell className="font-semibold">{v.name}</TableCell>
-                                    <TableCell className="text-xs text-muted-foreground font-mono">{v.id}</TableCell>
-                                    <TableCell className="text-right">
-                                        <Button variant="ghost" size="icon" title="Convert to Staff" className="text-indigo-500" onClick={() => handleConvertToStaff(v.id, v.name)}><UserPlus className="h-4 w-4" /></Button>
-                                        <Button variant="ghost" size="icon" onClick={() => { setEditingVendor(v); setEditName(v.name) }}><Edit2 className="h-4 w-4" /></Button>
-                                        <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(v.id)}><Trash2 className="h-4 w-4" /></Button>
-                                    </TableCell>
+                <>
+                    {/* Desktop Table View */}
+                    <div className="hidden md:block border rounded-xl bg-white dark:bg-zinc-950 overflow-hidden shadow-sm">
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-slate-50/50 dark:bg-zinc-900/50">
+                                    <TableHead className="w-10"></TableHead>
+                                    <TableHead>Name</TableHead>
+                                    <TableHead>ID</TableHead>
+                                    <TableHead className="text-right">Actions</TableHead>
                                 </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
-                </div>
+                            </TableHeader>
+                            <TableBody>
+                                {filtered.map(v => (
+                                    <TableRow key={v.id}>
+                                        <TableCell><Building2 className="h-4 w-4" /></TableCell>
+                                        <TableCell className="font-semibold">{v.name}</TableCell>
+                                        <TableCell className="text-xs text-muted-foreground font-mono">{v.id}</TableCell>
+                                        <TableCell className="text-right">
+                                            <Button variant="ghost" size="icon" title="Convert to Staff" onClick={() => handleConvertToStaff(v.id, v.name)}><UserPlus className="h-4 w-4" /></Button>
+                                            <Button variant="ghost" size="icon" onClick={() => { setEditingVendor(v); setEditName(v.name) }}><Edit2 className="h-4 w-4" /></Button>
+                                            <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => handleDelete(v.id)}><Trash2 className="h-4 w-4" /></Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </div>
+                    {/* Mobile List View (Stacks Cards) */}
+                    <div className="md:hidden grid gap-4 grid-cols-1">
+                        {filtered.map(v => (
+                            <Card key={v.id} className="group hover:border-emerald-500/50 transition-colors">
+                                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                    <Building2 className="h-4 w-4" />
+                                    <div className="flex gap-1 opacity-100 transition-opacity">
+                                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Convert to Staff" onClick={() => handleConvertToStaff(v.id, v.name)}><UserPlus className="h-4 w-4" /></Button>
+                                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingVendor(v); setEditName(v.name) }}><Edit2 className="h-4 w-4" /></Button>
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => handleDelete(v.id)}><Trash2 className="h-4 w-4" /></Button>
+                                    </div>
+                                </CardHeader>
+                                <CardContent>
+                                    <CardTitle className="text-lg truncate">{v.name}</CardTitle>
+                                    <p className="text-xs text-muted-foreground mt-1">ID: {v.id.slice(0, 8)}...</p>
+                                </CardContent>
+                            </Card>
+                        ))}
+                    </div>
+                </>
             ) : (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     {filtered.map(v => (
                         <Card key={v.id} className="group hover:border-emerald-500/50 transition-colors">
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                                <Building2 className="h-4 w-4 text-emerald-500" />
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-indigo-500" title="Convert to Staff" onClick={() => handleConvertToStaff(v.id, v.name)}><UserPlus className="h-4 w-4" /></Button>
+                                <Building2 className="h-4 w-4" />
+                                <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" title="Convert to Staff" onClick={() => handleConvertToStaff(v.id, v.name)}><UserPlus className="h-4 w-4" /></Button>
                                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingVendor(v); setEditName(v.name) }}><Edit2 className="h-4 w-4" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500" onClick={() => handleDelete(v.id)}><Trash2 className="h-4 w-4" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => handleDelete(v.id)}><Trash2 className="h-4 w-4" /></Button>
                                 </div>
                             </CardHeader>
                             <CardContent>
