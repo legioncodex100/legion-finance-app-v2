@@ -166,6 +166,9 @@ Skills are in `.agent/skills/` - I read them automatically.
 - API & Webhook Logs feature (`api_logs` table, `/settings/logs` page)
 - Service role client for webhook handlers
 - Fixed Supabase 1000-row pagination limit
+- Updated model-bifurcation workflow + implementation-planning skill (23 total skills)
+- **Deployed to production**: `https://legion-finance.vercel.app`
+- Webhook endpoint: `/api/webhooks/mindbody`
 
 ### January 14, 2026 (AM)
 - Bulk delete, search, sortable columns for Accounts Payable
