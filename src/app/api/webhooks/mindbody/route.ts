@@ -69,10 +69,11 @@ async function getDefaultUserId(supabase: any): Promise<string | null> {
 export async function POST(request: NextRequest) {
     const startTime = Date.now()
     let eventType: string | undefined
-    let payload: WebhookPayload | undefined
+    let payloadForLogging: WebhookPayload | undefined
 
     try {
-        payload = await request.json()
+        const payload: WebhookPayload = await request.json()
+        payloadForLogging = payload
 
         // Support both new format (eventId) and legacy format (eventType)
         eventType = payload.eventId || payload.eventType
@@ -129,7 +130,7 @@ export async function POST(request: NextRequest) {
             source: 'mindbody',
             eventType: eventType || 'unknown',
             status: 'success',
-            requestData: payload,
+            requestData: payloadForLogging,
             durationMs: Date.now() - startTime
         })
 
@@ -143,7 +144,7 @@ export async function POST(request: NextRequest) {
             source: 'mindbody',
             eventType: eventType || 'unknown',
             status: 'error',
-            requestData: payload,
+            requestData: payloadForLogging,
             errorMessage: error.message,
             durationMs: Date.now() - startTime
         })

@@ -4,26 +4,40 @@ description: Model bifurcation rule - Claude for planning, Gemini for execution
 
 # AI Model Assignment Rule
 
-## Planning Phase (PLANNING mode)
-- Use **Claude 4.5 Opus** for:
-  - Requirements analysis
-  - Architecture decisions
-  - Implementation planning
-  - Design documents
-  - Code reviews
+## When to Use Claude (Planning)
+Use **Claude Opus 4** for:
+- Requirements analysis and clarification
+- Architecture decisions
+- Implementation planning (creating `implementation_plan.md`)
+- Design documents
+- Complex debugging requiring deep reasoning
+- Code reviews
 
-## Execution Phase (EXECUTION mode)
-- Use **Gemini 3.0 Flash** for:
-  - Writing code
-  - Making file changes
-  - Running commands
-  - Building features
-  - Bug fixes
+**Switch to Gemini when:** Plan is approved and ready for coding.
 
-## Verification Phase (VERIFICATION mode)
-- Use **Gemini 3.0 Flash** for:
-  - Running tests
-  - Validating changes
-  - Creating walkthroughs
+---
+
+## When to Use Gemini (Execution)
+Use **Gemini 2.5 Pro** for:
+- Writing code and making file changes
+- Running commands and builds
+- Building features from approved plans
+- Bug fixes with clear reproduction steps
+- Creating/updating tests
+- Verification and walkthroughs
+
+**Switch to Claude when:** You need architectural guidance or hit unexpected complexity.
+
+---
+
+## Quick Reference
+
+| Task | Model |
+|------|-------|
+| "How should we design X?" | Claude |
+| "Build the plan we discussed" | Gemini |
+| "Why isn't this working?" | Claude (analyze) → Gemini (fix) |
+| "Add a button to do Y" | Gemini |
+| "Refactor the auth system" | Claude (plan) → Gemini (execute) |
 
 This rule applies automatically to all tasks in this workspace.
