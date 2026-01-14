@@ -169,6 +169,38 @@ Skills are in `.agent/skills/` - I read them automatically.
 - Updated model-bifurcation workflow + implementation-planning skill (23 total skills)
 - **Deployed to production**: `https://legion-finance.vercel.app`
 - Webhook endpoint: `/api/webhooks/mindbody`
+- Created refactor plan (see below)
+
+---
+
+## Pending Work (Next Week)
+
+### 🔴 Codebase Refactor - PLANNED
+
+A comprehensive refactor plan was created based on skill guidelines. Key findings:
+
+| Critical Files (>1000 lines) |
+|------------------------------|
+| `transactions/page.tsx` - 1,757 lines |
+| `accounts-payable/page.tsx` - 1,720 lines |
+| `reconciliation-modal.tsx` - 1,686 lines |
+| `budget.ts` - 1,330 lines |
+
+**4-Phase Approach:**
+1. Phase 1: Shared infrastructure (hooks, components) - 3 days
+2. Phase 2: Critical pages - 6-8 days
+3. Phase 3: High priority pages - 4-5 days  
+4. Phase 4: Action files - 3-4 days
+
+**To Start:** Run `/model-bifurcation` and ask Claude to review refactor plan, then switch to Gemini for execution.
+
+### ⚠️ Mindbody Webhooks - PENDING
+
+Webhooks deployed but need to register in Mindbody Developer Portal:
+1. Go to https://developers.mindbodyonline.com
+2. Register webhook URL: `https://legion-finance.vercel.app/api/webhooks/mindbody`
+3. Subscribe to: `client.created`, `client.updated`, `clientSale.created`, etc.
+4. Add `SUPABASE_SERVICE_ROLE_KEY` to Vercel env vars
 
 ### January 14, 2026 (AM)
 - Bulk delete, search, sortable columns for Accounts Payable
