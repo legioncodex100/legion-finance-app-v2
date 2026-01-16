@@ -464,6 +464,14 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
 
     if (weeksBack === 0) return []
 
+    // Helper to format date as YYYY-MM-DD in local time
+    const formatDateLocal = (d: Date): string => {
+        const year = d.getFullYear()
+        const month = String(d.getMonth() + 1).padStart(2, '0')
+        const day = String(d.getDate()).padStart(2, '0')
+        return `${year}-${month}-${day}`
+    }
+
     const today = new Date()
     today.setHours(0, 0, 0, 0)
 
@@ -473,9 +481,7 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
     const currentWeekStart = new Date(today)
     currentWeekStart.setDate(today.getDate() - diffToMonday)
 
-    // Go back N weeks from current week start
-    const historicalStartDate = new Date(currentWeekStart)
-    historicalStartDate.setDate(historicalStartDate.getDate() - (weeksBack * 7))
+    const currentWeekStartStr = formatDateLocal(currentWeekStart)
 
     // Get opening balance setting
     const { data: settings } = await supabase
@@ -486,13 +492,19 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
     const openingBalance = Number(settings?.opening_balance) || 0
 
     // Fetch ALL transactions up to the start of current week
-    // This is needed to calculate running balance at end of each historical week
-    const { data: allTransactions } = await supabase
+    const { data: allTransactions, error } = await supabase
         .from('transactions')
         .select('id, transaction_date, amount, raw_party, description, type')
         .eq('user_id', user.id)
-        .lt('transaction_date', currentWeekStart.toISOString().split('T')[0])
+        .lt('transaction_date', currentWeekStartStr)
         .order('transaction_date', { ascending: true })
+
+    console.log('[HistoricalWeeks] Query params:', {
+        currentWeekStartStr,
+        weeksBack,
+        txCount: allTransactions?.length || 0,
+        error: error?.message
+    })
 
     const historical: HistoricalWeek[] = []
 
@@ -503,9 +515,8 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
         const weekEnd = new Date(weekStart)
         weekEnd.setDate(weekStart.getDate() + 6)
 
-        // Use string dates for comparison to avoid timezone issues
-        const weekStartStr = weekStart.toISOString().split('T')[0]
-        const weekEndStr = weekEnd.toISOString().split('T')[0]
+        const weekStartStr = formatDateLocal(weekStart)
+        const weekEndStr = formatDateLocal(weekEnd)
 
         // Transactions for THIS week only (for inflows/outflows display)
         const weekTransactions = allTransactions?.filter(tx => {
