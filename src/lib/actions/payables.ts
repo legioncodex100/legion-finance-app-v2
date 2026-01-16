@@ -519,19 +519,20 @@ export async function unlinkTransactionFromPayable(payableId: string, transactio
 
 /**
  * Unlink ALL transactions from a payable (reset bill)
+ * Handles both new junction table AND legacy linked_transaction_id
  */
 export async function unlinkPayableFromTransaction(payableId: string) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    // Get all linked transactions
+    // Get all linked transactions from JUNCTION table
     const { data: links } = await supabase
         .from('payable_transactions')
         .select('transaction_id')
         .eq('payable_id', payableId)
 
-    // Unlink all transactions
+    // Unlink all transactions from junction table
     if (links && links.length > 0) {
         const txIds = links.map(l => l.transaction_id)
         await supabase
@@ -547,7 +548,23 @@ export async function unlinkPayableFromTransaction(payableId: string) {
         .delete()
         .eq('payable_id', payableId)
 
-    // Reset payable
+    // ALSO check legacy linked_transaction_id column
+    const { data: payable } = await supabase
+        .from('payables')
+        .select('linked_transaction_id')
+        .eq('id', payableId)
+        .single()
+
+    if (payable?.linked_transaction_id) {
+        // Unlink the legacy transaction
+        await supabase
+            .from('transactions')
+            .update({ linked_payable_id: null, reconciliation_status: 'unreconciled' })
+            .eq('id', payable.linked_transaction_id)
+            .eq('user_id', user.id)
+    }
+
+    // Reset payable (clear both new and legacy fields)
     const { error } = await supabase
         .from('payables')
         .update({
@@ -555,7 +572,8 @@ export async function unlinkPayableFromTransaction(payableId: string) {
             bill_status: 'scheduled',
             is_paid: false,
             reconciled_at: null,
-            last_paid_date: null
+            last_paid_date: null,
+            linked_transaction_id: null  // Clear legacy field too
         })
         .eq('id', payableId)
         .eq('user_id', user.id)
@@ -600,14 +618,37 @@ export async function getPayablesSummary() {
 
 // ============= Auto-Bill Generation =============
 
-export async function generateStaffSalaryBills(weekStartDate?: Date) {
+export async function generateStaffSalaryBills(targetMonth?: number, targetYear?: number) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    // Get next Friday (or specified date)
-    const targetDate = weekStartDate || getNextFriday()
-    const dueDateStr = targetDate.toISOString().split('T')[0]
+    // Default to current month if not specified
+    const now = new Date()
+    const month = targetMonth ?? now.getMonth()
+    const year = targetYear ?? now.getFullYear()
+
+    // Get all Fridays in the target month
+    function getFridaysInMonth(y: number, m: number): Date[] {
+        const fridays: Date[] = []
+        const date = new Date(y, m, 1)
+
+        // Find first Friday
+        while (date.getDay() !== 5) {
+            date.setDate(date.getDate() + 1)
+        }
+
+        // Collect all Fridays in the month
+        while (date.getMonth() === m) {
+            fridays.push(new Date(date))
+            date.setDate(date.getDate() + 7)
+        }
+
+        return fridays
+    }
+
+    const fridays = getFridaysInMonth(year, month)
+    if (fridays.length === 0) return { created: 0, skipped: 0 }
 
     // Get staff with weekly salary
     const { data: staffList } = await supabase
@@ -617,39 +658,47 @@ export async function generateStaffSalaryBills(weekStartDate?: Date) {
         .eq('is_active', true)
         .gt('weekly_salary', 0)
 
-    if (!staffList || staffList.length === 0) return { created: 0 }
+    if (!staffList || staffList.length === 0) return { created: 0, skipped: 0 }
 
     let created = 0
-    for (const staff of staffList) {
-        // Check if bill already exists for this week
-        const { data: existing } = await supabase
-            .from('payables')
-            .select('id')
-            .eq('user_id', user.id)
-            .eq('staff_id', staff.id)
-            .eq('next_due', dueDateStr)
-            .eq('is_system_generated', true)
-            .single()
+    let skipped = 0
 
-        if (!existing) {
-            await supabase.from('payables').insert({
-                user_id: user.id,
-                name: `Salary: ${staff.name}`,
-                payee_type: 'staff',
-                staff_id: staff.id,
-                amount: staff.weekly_salary,
-                frequency: 'weekly',
-                next_due: dueDateStr,
-                is_recurring: true,
-                bill_status: 'scheduled',
-                is_system_generated: true,
-                notes: staff.is_owner ? 'Owner salary' : 'Staff salary'
-            })
-            created++
+    // For each staff member, create a bill for each Friday
+    for (const staff of staffList) {
+        for (const friday of fridays) {
+            const dueDateStr = friday.toISOString().split('T')[0]
+
+            // Check if bill already exists for this week
+            const { data: existing } = await supabase
+                .from('payables')
+                .select('id')
+                .eq('user_id', user.id)
+                .eq('staff_id', staff.id)
+                .eq('next_due', dueDateStr)
+                .maybeSingle()
+
+            if (existing) {
+                skipped++
+            } else {
+                await supabase.from('payables').insert({
+                    user_id: user.id,
+                    name: `Salary: ${staff.name}`,
+                    payee_type: 'staff',
+                    staff_id: staff.id,
+                    amount: staff.weekly_salary,
+                    frequency: 'weekly',
+                    next_due: dueDateStr,
+                    is_recurring: true,
+                    bill_status: 'scheduled',
+                    is_system_generated: true,
+                    notes: staff.is_owner ? 'Owner salary' : 'Staff salary'
+                })
+                created++
+            }
         }
     }
 
-    return { created }
+    return { created, skipped }
 }
 
 export async function generateUpcomingBills(targetMonth: number, targetYear: number) {

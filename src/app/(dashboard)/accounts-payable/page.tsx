@@ -432,13 +432,14 @@ export default function AccountsPayablePage() {
                         variant="outline"
                         onClick={async () => {
                             setIsGeneratingSalaries(true)
-                            const result = await generateStaffSalaryBills()
+                            const now = new Date()
+                            const result = await generateStaffSalaryBills(now.getMonth(), now.getFullYear())
                             setIsGeneratingSalaries(false)
                             if (result.created > 0) {
-                                alert(`Created ${result.created} salary bill(s) for this week!`)
+                                alert(`Created ${result.created} salary bill(s) for ${now.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}!${result.skipped ? ` (${result.skipped} already existed)` : ''}`)
                                 fetchData()
                             } else {
-                                alert('No new salary bills to create. Either already exist or no staff have weekly_salary set.')
+                                alert(`No new salary bills to create for ${now.toLocaleDateString('en-GB', { month: 'long' })}. Either already exist or no staff have weekly_salary set.`)
                             }
                         }}
                         disabled={isGeneratingSalaries}
