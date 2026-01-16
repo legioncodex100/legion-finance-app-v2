@@ -319,9 +319,18 @@ export default function AccountsPayablePage() {
             .order('linked_at', { ascending: false })
 
         if (links && links.length > 0) {
-            // For now, show the most recent transaction in the existing UI
-            // TODO: Update UI to show all linked transactions
+            // Show the most recent transaction (could extend to show all)
             setLinkedTransaction(links[0].transactions)
+        } else if (payable.linked_transaction_id) {
+            // Fallback to legacy linked_transaction_id column
+            const { data: legacyTx } = await supabase
+                .from('transactions')
+                .select('id, description, amount, transaction_date, raw_party, type, categories(name)')
+                .eq('id', payable.linked_transaction_id)
+                .single()
+            if (legacyTx) {
+                setLinkedTransaction(legacyTx)
+            }
         }
         setLoadingDetail(false)
     }

@@ -874,7 +874,7 @@ export async function getActiveBillsForLinking(): Promise<{ id: string; name: st
 // ACCOUNTS PAYABLE LINKING (Unified - replaces bills/invoices)
 // ============================================
 
-// Link a transaction to a payable and mark it as paid
+// Link a transaction to a payable via junction table
 export async function linkTransactionToPayable(
     transactionId: string,
     payableId: string
@@ -895,28 +895,74 @@ export async function linkTransactionToPayable(
         return { success: false, error: 'Payable not found' }
     }
 
-    // Link the transaction to the payable
+    // Get the transaction amount
+    const { data: transaction } = await supabase
+        .from('transactions')
+        .select('amount')
+        .eq('id', transactionId)
+        .eq('user_id', user.id)
+        .single()
+
+    if (!transaction) {
+        return { success: false, error: 'Transaction not found' }
+    }
+
+    const txAmount = Math.abs(Number(transaction.amount))
+
+    // Insert into junction table
+    const { error: junctionError } = await supabase
+        .from('payable_transactions')
+        .insert({
+            payable_id: payableId,
+            transaction_id: transactionId,
+            amount: txAmount,
+            linked_at: new Date().toISOString(),
+            linked_by: user.id
+        })
+
+    if (junctionError) {
+        if (junctionError.code === '23505') {
+            return { success: false, error: 'Transaction already linked to this payable' }
+        }
+        return { success: false, error: junctionError.message }
+    }
+
+    // Calculate total amount_paid from ALL linked transactions
+    const { data: allLinks } = await supabase
+        .from('payable_transactions')
+        .select('amount')
+        .eq('payable_id', payableId)
+
+    const totalPaid = (allLinks || []).reduce((sum, link) => sum + Number(link.amount), 0)
+    const totalAmount = Number(payable.amount)
+    const isFullyPaid = totalPaid >= totalAmount
+
+    // Update transaction to mark it as linked
     const { error: txError } = await supabase
         .from('transactions')
-        .update({ linked_payable_id: payableId })
+        .update({
+            linked_payable_id: payableId,
+            reconciliation_status: 'reconciled',
+            confirmed: true
+        })
         .eq('id', transactionId)
         .eq('user_id', user.id)
 
     if (txError) {
-        return { success: false, error: 'Failed to link transaction' }
+        return { success: false, error: 'Failed to update transaction' }
     }
 
-    // Build update for payable
+    // Build update for payable - only mark paid if fully covered
     const updateData: Record<string, any> = {
-        is_paid: true,
+        amount_paid: totalPaid,
         last_paid_date: new Date().toISOString().split('T')[0],
-        linked_transaction_id: transactionId,
-        reconciled_at: new Date().toISOString(),
-        bill_status: 'paid'
+        is_paid: isFullyPaid,
+        bill_status: isFullyPaid ? 'paid' : 'scheduled',
+        reconciled_at: isFullyPaid ? new Date().toISOString() : null
     }
 
-    // For recurring payables, advance next_due
-    if (payable.is_recurring && payable.frequency !== 'one-time') {
+    // For recurring payables that are fully paid, advance next_due
+    if (isFullyPaid && payable.is_recurring && payable.frequency !== 'one-time') {
         let nextDue = new Date(payable.next_due || new Date())
         switch (payable.frequency) {
             case 'weekly':
@@ -934,7 +980,8 @@ export async function linkTransactionToPayable(
         }
         updateData.next_due = nextDue.toISOString().split('T')[0]
         updateData.is_paid = false // Reset for next period
-        updateData.bill_status = 'approved' // Ready for next payment
+        updateData.amount_paid = 0 // Reset amount_paid for next period
+        updateData.bill_status = 'scheduled'
     }
 
     // Update payable
