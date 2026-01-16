@@ -36,6 +36,7 @@ import {
     type BillStatus,
     type Frequency
 } from "@/lib/actions/payables"
+import { unlinkTransactionFromPayable } from "@/lib/actions/transactions"
 import { createClient } from "@/lib/supabase/client"
 
 export default function AccountsPayablePage() {
@@ -97,7 +98,7 @@ export default function AccountsPayablePage() {
     // Detail modal
     const [detailModalOpen, setDetailModalOpen] = React.useState(false)
     const [selectedPayable, setSelectedPayable] = React.useState<Payable | null>(null)
-    const [linkedTransaction, setLinkedTransaction] = React.useState<any | null>(null)
+    const [linkedTransactions, setLinkedTransactions] = React.useState<any[]>([])
     const [loadingDetail, setLoadingDetail] = React.useState(false)
 
     // Bulk selection
@@ -308,7 +309,7 @@ export default function AccountsPayablePage() {
     const openDetailModal = async (payable: Payable) => {
         setSelectedPayable(payable)
         setDetailModalOpen(true)
-        setLinkedTransaction(null)
+        setLinkedTransactions([])
         setLoadingDetail(true)
 
         // Fetch all linked transactions from junction table
@@ -318,20 +319,34 @@ export default function AccountsPayablePage() {
             .eq('payable_id', payable.id)
             .order('linked_at', { ascending: false })
 
+        const allTransactions: any[] = []
+
         if (links && links.length > 0) {
-            // Show the most recent transaction (could extend to show all)
-            setLinkedTransaction(links[0].transactions)
-        } else if (payable.linked_transaction_id) {
-            // Fallback to legacy linked_transaction_id column
+            // Add all transactions from junction table
+            links.forEach(link => {
+                if (link.transactions) {
+                    allTransactions.push({
+                        ...link.transactions,
+                        linked_at: link.linked_at,
+                        link_amount: link.amount
+                    })
+                }
+            })
+        }
+
+        // Also check legacy linked_transaction_id for backward compatibility
+        if (payable.linked_transaction_id && !allTransactions.find(t => t.id === payable.linked_transaction_id)) {
             const { data: legacyTx } = await supabase
                 .from('transactions')
                 .select('id, description, amount, transaction_date, raw_party, type, categories(name)')
                 .eq('id', payable.linked_transaction_id)
                 .single()
             if (legacyTx) {
-                setLinkedTransaction(legacyTx)
+                allTransactions.push(legacyTx)
             }
         }
+
+        setLinkedTransactions(allTransactions)
         setLoadingDetail(false)
     }
 
@@ -1300,42 +1315,47 @@ export default function AccountsPayablePage() {
                                 </div>
                             )}
 
-                            {/* Linked Transaction Section */}
+                            {/* Linked Transactions Section */}
                             <div className="pt-4 border-t border-zinc-800">
-                                <p className="text-[10px] uppercase text-zinc-500 font-bold mb-2">Linked Transaction</p>
+                                <p className="text-[10px] uppercase text-zinc-500 font-bold mb-2">
+                                    Linked Transactions ({linkedTransactions.length})
+                                </p>
                                 {loadingDetail ? (
                                     <div className="flex items-center gap-2 text-zinc-400">
                                         <Loader2 className="h-4 w-4 animate-spin" /> Loading...
                                     </div>
-                                ) : linkedTransaction ? (
-                                    <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
-                                        <div className="flex justify-between items-start">
-                                            <div>
-                                                <p className="text-sm font-medium text-white">{linkedTransaction.raw_party || linkedTransaction.description}</p>
-                                                <p className="text-xs text-zinc-400">
-                                                    {new Date(linkedTransaction.transaction_date).toLocaleDateString('en-GB')} • {linkedTransaction.description}
-                                                </p>
+                                ) : linkedTransactions.length > 0 ? (
+                                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                                        {linkedTransactions.map((tx, idx) => (
+                                            <div key={tx.id || idx} className="bg-zinc-900 rounded-lg p-3 border border-zinc-800">
+                                                <div className="flex justify-between items-start">
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-sm font-medium text-white truncate">{tx.raw_party || tx.description}</p>
+                                                        <p className="text-xs text-zinc-400">
+                                                            {new Date(tx.transaction_date).toLocaleDateString('en-GB')} • {tx.description}
+                                                        </p>
+                                                    </div>
+                                                    <p className="text-sm font-bold text-emerald-400 ml-2">£{Math.abs(tx.link_amount || tx.amount).toFixed(2)}</p>
+                                                </div>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="mt-2 w-full h-7 text-xs border-rose-800 text-rose-400 hover:bg-rose-900/30"
+                                                    onClick={async () => {
+                                                        if (!confirm(`Unlink this £${Math.abs(tx.link_amount || tx.amount).toFixed(2)} transaction?`)) return
+                                                        await unlinkTransactionFromPayable(tx.id)
+                                                        openDetailModal(selectedPayable)
+                                                        fetchData()
+                                                    }}
+                                                >
+                                                    <X className="h-3 w-3 mr-1" /> Unlink
+                                                </Button>
                                             </div>
-                                            <p className="text-sm font-bold text-emerald-400">£{Math.abs(linkedTransaction.amount).toFixed(2)}</p>
-                                        </div>
-                                        <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="mt-3 w-full border-rose-800 text-rose-400 hover:bg-rose-900/30"
-                                            onClick={async () => {
-                                                if (!confirm("Unlink this transaction? The bill will be marked as unpaid.")) return
-                                                await unlinkPayableFromTransaction(selectedPayable.id)
-                                                setDetailModalOpen(false)
-                                                setSelectedPayable(null)
-                                                fetchData()
-                                            }}
-                                        >
-                                            <X className="h-4 w-4 mr-2" /> Unlink Transaction
-                                        </Button>
+                                        ))}
                                     </div>
                                 ) : (
                                     <div className="text-zinc-500 text-sm italic">
-                                        No transaction linked yet
+                                        No transactions linked yet
                                     </div>
                                 )}
                             </div>
