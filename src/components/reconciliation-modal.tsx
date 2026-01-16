@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { updateTransactionDetails, getAICategorySuggestion, createCategory, getFinancialClasses, linkTransactionToPayable, getPayablesForLinking } from "@/lib/actions/transactions"
+import { updateTransactionDetails, getAICategorySuggestion, createCategory, getFinancialClasses, linkTransactionToPayable, unlinkTransactionFromPayable, getPayablesForLinking } from "@/lib/actions/transactions"
 import { createRule, RuleCondition } from "@/lib/actions/rules"
 import { getVendors, createVendor, assignVendorBulk } from "@/lib/actions/vendors"
 import { getStaff, createStaff, StaffRole } from "@/lib/actions/staff"
@@ -862,6 +862,39 @@ export function ReconciliationModal({
                             <Label className="text-[11px] uppercase font-black tracking-widest text-muted-foreground flex items-center gap-2">
                                 <FileText className="h-3 w-3" /> Link to Payable ({payables.length} available)
                             </Label>
+
+                            {/* Show Currently Linked Payable */}
+                            {transaction.linked_payable_id && (
+                                <div className="p-3 bg-cyan-50 dark:bg-cyan-950/30 rounded-lg border border-cyan-200 dark:border-cyan-800">
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-[10px] font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-wide">Currently Linked To</p>
+                                            <p className="text-sm font-bold mt-0.5">
+                                                {payables.find(p => p.id === transaction.linked_payable_id)?.name ||
+                                                    payables.find(p => p.id === transaction.linked_payable_id)?.vendor_name ||
+                                                    'Linked Payable'}
+                                            </p>
+                                        </div>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-800 dark:hover:bg-rose-950/30"
+                                            onClick={async () => {
+                                                try {
+                                                    await unlinkTransactionFromPayable(transaction.id)
+                                                    onUpdate()
+                                                    onOpenChange(false)
+                                                } catch (e) {
+                                                    console.error('Failed to unlink:', e)
+                                                }
+                                            }}
+                                        >
+                                            Unlink
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+
                             <span className="text-xs text-muted-foreground">Match this transaction to an existing payable</span>
                             <div className="relative">
                                 <input
