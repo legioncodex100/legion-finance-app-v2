@@ -474,45 +474,47 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
     currentWeekStart.setDate(today.getDate() - diffToMonday)
 
     // Go back N weeks from current week start
-    const startDate = new Date(currentWeekStart)
-    startDate.setDate(startDate.getDate() - (weeksBack * 7))
+    const historicalStartDate = new Date(currentWeekStart)
+    historicalStartDate.setDate(historicalStartDate.getDate() - (weeksBack * 7))
 
-    // Fetch all transactions in the historical range
-    const { data: transactions } = await supabase
+    // Get opening balance setting
+    const { data: settings } = await supabase
+        .from('user_settings')
+        .select('opening_balance')
+        .eq('user_id', user.id)
+        .single()
+    const openingBalance = Number(settings?.opening_balance) || 0
+
+    // Fetch ALL transactions up to the start of current week
+    // This is needed to calculate running balance at end of each historical week
+    const { data: allTransactions } = await supabase
         .from('transactions')
         .select('id, transaction_date, amount, raw_party, description, type')
         .eq('user_id', user.id)
-        .gte('transaction_date', startDate.toISOString().split('T')[0])
         .lt('transaction_date', currentWeekStart.toISOString().split('T')[0])
         .order('transaction_date', { ascending: true })
 
-    // Get current balance to work backwards
-    const currentBalance = await getCurrentBankBalance()
+    const historical: HistoricalWeek[] = []
 
-    // Calculate total net from historical weeks to work backwards
-    let totalHistoricalNet = 0
-    const weeklyData: Array<{
-        weekNumber: number
-        weekStart: Date
-        weekEnd: Date
-        actualInflows: number
-        actualOutflows: number
-        netCashFlow: number
-        incomeSources: { source: string; amount: number }[]
-        expenseSources: { source: string; amount: number }[]
-    }> = []
-
-    // First pass: calculate each week's net
     for (let w = weeksBack; w >= 1; w--) {
         const weekStart = new Date(currentWeekStart)
         weekStart.setDate(currentWeekStart.getDate() - (w * 7))
 
         const weekEnd = new Date(weekStart)
         weekEnd.setDate(weekStart.getDate() + 6)
+        weekEnd.setHours(23, 59, 59, 999)
 
-        const weekTransactions = transactions?.filter(tx => {
+        const weekEndStr = weekEnd.toISOString().split('T')[0]
+
+        // Transactions for THIS week only (for inflows/outflows display)
+        const weekTransactions = allTransactions?.filter(tx => {
             const txDate = new Date(tx.transaction_date)
             return txDate >= weekStart && txDate <= weekEnd
+        }) || []
+
+        // ALL transactions up to and including the end of this week (for balance)
+        const transactionsUpToWeekEnd = allTransactions?.filter(tx => {
+            return tx.transaction_date <= weekEndStr
         }) || []
 
         const incomeSources: { source: string; amount: number }[] = []
@@ -543,45 +545,21 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
             }
         })
 
-        const netCashFlow = actualInflows - actualOutflows
-        totalHistoricalNet += netCashFlow
+        // Calculate balance at end of this week = opening balance + sum of all transactions up to this week
+        const balanceAtWeekEnd = openingBalance + transactionsUpToWeekEnd.reduce((sum, tx) => sum + Number(tx.amount), 0)
 
-        weeklyData.push({
+        historical.push({
             weekNumber: -w,
             weekStart,
             weekEnd,
             actualInflows,
             actualOutflows,
-            netCashFlow,
-            incomeSources,
-            expenseSources
-        })
-    }
-
-    // Calculate balance at the START of the historical period
-    // currentBalance = startBalance + totalHistoricalNet + currentWeekNet
-    // Since we don't have currentWeekNet yet, we approximate:
-    // Balance at end of each historical week = currentBalance - (sum of all subsequent weeks' nets)
-    const historical: HistoricalWeek[] = []
-    let cumulativeNet = 0
-
-    for (const week of weeklyData) {
-        cumulativeNet += week.netCashFlow
-        // Balance at end of this week = currentBalance - (totalHistoricalNet - cumulativeNet up to this week)
-        const runningBalance = currentBalance - totalHistoricalNet + cumulativeNet
-
-        historical.push({
-            weekNumber: week.weekNumber,
-            weekStart: week.weekStart,
-            weekEnd: week.weekEnd,
-            actualInflows: week.actualInflows,
-            actualOutflows: week.actualOutflows,
-            netCashFlow: week.netCashFlow,
-            runningBalance,
+            netCashFlow: actualInflows - actualOutflows,
+            runningBalance: balanceAtWeekEnd,
             isActual: true,
             sources: {
-                income: week.incomeSources.slice(0, 5),
-                expenses: week.expenseSources.slice(0, 5)
+                income: incomeSources.slice(0, 5),
+                expenses: expenseSources.slice(0, 5)
             }
         })
     }
