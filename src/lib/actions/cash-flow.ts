@@ -492,18 +492,22 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
     const openingBalance = Number(settings?.opening_balance) || 0
 
     // Fetch ALL transactions up to the start of current week
+    // Need all transactions (not just historical window) for running balance calculation
     const { data: allTransactions, error } = await supabase
         .from('transactions')
         .select('id, transaction_date, amount, raw_party, description, type')
         .eq('user_id', user.id)
         .lt('transaction_date', currentWeekStartStr)
-        .order('transaction_date', { ascending: true })
+        .order('transaction_date', { ascending: false }) // Most recent first for debugging
+        .limit(10000)
 
-    console.log('[HistoricalWeeks] Query params:', {
+    console.log('[HistoricalWeeks] Query:', {
         currentWeekStartStr,
         weeksBack,
         txCount: allTransactions?.length || 0,
-        error: error?.message
+        error: error?.message,
+        firstTx: allTransactions?.[0]?.transaction_date,
+        lastTx: allTransactions?.[allTransactions?.length - 1]?.transaction_date
     })
 
     const historical: HistoricalWeek[] = []
