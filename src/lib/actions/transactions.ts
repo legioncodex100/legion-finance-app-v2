@@ -1006,19 +1006,28 @@ export async function getPayablesForLinking(): Promise<{
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
+    // Show all payables that aren't fully paid (allows multi-transaction linking)
+    // We use amount_paid < amount instead of is_paid = false because:
+    // - is_paid may be true from legacy single-link but we now support multi-linking
+    // - A payable with some payments can still accept more transactions
     const { data: payables } = await supabase
         .from('payables')
-        .select('id, name, payee_type, amount, next_due, vendor:vendor_id(name), staff:staff_id(name)')
+        .select('id, name, payee_type, amount, amount_paid, next_due, vendor:vendor_id(name), staff:staff_id(name)')
         .eq('user_id', user.id)
-        .eq('is_paid', false)
-        .in('bill_status', ['approved', 'scheduled', 'overdue'])
+        .in('bill_status', ['approved', 'scheduled', 'overdue', 'paid'])
         .order('next_due', { ascending: true })
 
-    return (payables || []).map(p => ({
+    // Filter to only include payables where amount_paid < amount (not fully paid)
+    const unpaidPayables = (payables || []).filter(p =>
+        Number(p.amount_paid || 0) < Number(p.amount)
+    )
+
+    return unpaidPayables.map(p => ({
         id: p.id,
         name: p.name,
         payee_type: p.payee_type,
         amount: Number(p.amount),
+        amount_paid: Number(p.amount_paid || 0),
         next_due: p.next_due,
         vendor_name: (p.vendor as any)?.name,
         staff_name: (p.staff as any)?.name
