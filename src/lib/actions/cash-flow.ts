@@ -185,25 +185,13 @@ export async function analyzeHistoricalPatterns(): Promise<{ success: boolean; p
     return { success: true, patternsCreated }
 }
 
-// Get current bank balance (from Starling API first, fall back to transaction sum)
+// Get current bank balance (opening balance + sum of all transactions)
 export async function getCurrentBankBalance(): Promise<number> {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    // Try to get live balance from Starling API first
-    try {
-        const { getStarlingBalance } = await import('./starling')
-        const starlingBalance = await getStarlingBalance()
-        if (starlingBalance) {
-            console.log('[CashFlow] getCurrentBankBalance from Starling:', starlingBalance.cleared)
-            return starlingBalance.cleared
-        }
-    } catch (e) {
-        console.log('[CashFlow] Could not get Starling balance, falling back to transaction sum')
-    }
-
-    // Fallback: Get user's opening balance + sum of all transactions
+    // Get user's opening balance
     const { data: settings } = await supabase
         .from('user_settings')
         .select('opening_balance')

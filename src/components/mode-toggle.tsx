@@ -14,6 +14,22 @@ import {
 
 export function ModeToggle() {
     const { setTheme } = useTheme()
+    const [mounted, setMounted] = React.useState(false)
+
+    // Only render after mount to prevent hydration mismatch with Radix IDs
+    React.useEffect(() => {
+        setMounted(true)
+    }, [])
+
+    if (!mounted) {
+        // Return a placeholder with the same dimensions to avoid layout shift
+        return (
+            <Button variant="ghost" size="icon" className="h-8 w-8" disabled>
+                <Sun className="h-[1.2rem] w-[1.2rem]" />
+                <span className="sr-only">Toggle theme</span>
+            </Button>
+        )
+    }
 
     return (
         <DropdownMenu>
