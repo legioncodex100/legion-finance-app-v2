@@ -502,14 +502,14 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
 
         const weekEnd = new Date(weekStart)
         weekEnd.setDate(weekStart.getDate() + 6)
-        weekEnd.setHours(23, 59, 59, 999)
 
+        // Use string dates for comparison to avoid timezone issues
+        const weekStartStr = weekStart.toISOString().split('T')[0]
         const weekEndStr = weekEnd.toISOString().split('T')[0]
 
         // Transactions for THIS week only (for inflows/outflows display)
         const weekTransactions = allTransactions?.filter(tx => {
-            const txDate = new Date(tx.transaction_date)
-            return txDate >= weekStart && txDate <= weekEnd
+            return tx.transaction_date >= weekStartStr && tx.transaction_date <= weekEndStr
         }) || []
 
         // ALL transactions up to and including the end of this week (for balance)
