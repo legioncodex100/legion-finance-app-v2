@@ -304,22 +304,26 @@ export default function AccountsPayablePage() {
         setLoadingTxns(false)
     }
 
-    // Open detail modal with linked transaction
+    // Open detail modal with linked transactions (now from junction table)
     const openDetailModal = async (payable: Payable) => {
         setSelectedPayable(payable)
         setDetailModalOpen(true)
         setLinkedTransaction(null)
+        setLoadingDetail(true)
 
-        if (payable.linked_transaction_id) {
-            setLoadingDetail(true)
-            const { data } = await supabase
-                .from('transactions')
-                .select('id, description, amount, transaction_date, raw_party, type, categories(name)')
-                .eq('id', payable.linked_transaction_id)
-                .single()
-            setLinkedTransaction(data)
-            setLoadingDetail(false)
+        // Fetch all linked transactions from junction table
+        const { data: links } = await supabase
+            .from('payable_transactions')
+            .select('*, transactions(id, description, amount, transaction_date, raw_party, type, categories(name))')
+            .eq('payable_id', payable.id)
+            .order('linked_at', { ascending: false })
+
+        if (links && links.length > 0) {
+            // For now, show the most recent transaction in the existing UI
+            // TODO: Update UI to show all linked transactions
+            setLinkedTransaction(links[0].transactions)
         }
+        setLoadingDetail(false)
     }
 
     // Filter
@@ -755,7 +759,7 @@ export default function AccountsPayablePage() {
                                                             )}
                                                         </TableCell>
                                                         <TableCell className="hidden md:table-cell">
-                                                            {p.linked_transaction_id ? (
+                                                            {Number(p.amount_paid) > 0 ? (
                                                                 <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-medium">
                                                                     Linked
                                                                 </span>
@@ -765,19 +769,21 @@ export default function AccountsPayablePage() {
                                                         </TableCell>
                                                         <TableCell className="text-right">
                                                             <div className="flex items-center justify-end gap-1">
-                                                                {p.bill_status !== 'paid' && !p.linked_transaction_id && (
+                                                                {p.bill_status !== 'paid' && (
                                                                     <>
-                                                                        <button onClick={() => handleMarkPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Mark Paid">
-                                                                            <CheckCircle2 className="h-4 w-4" />
-                                                                        </button>
+                                                                        {Number(p.amount_paid) === 0 && (
+                                                                            <button onClick={() => handleMarkPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Mark Paid">
+                                                                                <CheckCircle2 className="h-4 w-4" />
+                                                                            </button>
+                                                                        )}
                                                                         <button onClick={() => openLinkModal(p)} className="p-2 text-zinc-500 hover:text-sky-400" title="Link Transaction">
                                                                             <Link2 className="h-4 w-4" />
                                                                         </button>
                                                                     </>
                                                                 )}
-                                                                {/* Link button for paid items without linked transaction (retroactive linking) */}
-                                                                {p.bill_status === 'paid' && !p.linked_transaction_id && (
-                                                                    <button onClick={() => openLinkModalForPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Link to Transaction (Retroactive)">
+                                                                {/* Link button for paid items (add more transactions or link retroactively) */}
+                                                                {p.bill_status === 'paid' && (
+                                                                    <button onClick={() => openLinkModalForPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Link to Transaction">
                                                                         <Link2 className="h-4 w-4" />
                                                                     </button>
                                                                 )}
@@ -1327,7 +1333,7 @@ export default function AccountsPayablePage() {
 
                         {/* Actions */}
                         <div className="p-4 border-t border-zinc-900 flex gap-2">
-                            {!selectedPayable.linked_transaction_id && selectedPayable.bill_status !== 'paid' && (
+                            {selectedPayable.bill_status !== 'paid' && (
                                 <Button
                                     variant="outline"
                                     className="flex-1"
