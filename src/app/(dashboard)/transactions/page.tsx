@@ -166,7 +166,7 @@ export default function TransactionsPage() {
 
         let query = supabase
             .from('transactions')
-            .select('*, vendors(name), staff(name, role)')
+            .select('*, vendors(name), staff(name, role), payables:linked_payable_id(id, name, amount, next_due)')
 
         // Apply Sorting
         if (sortColumn === 'date') {
@@ -1016,20 +1016,36 @@ export default function TransactionsPage() {
                                                             <Receipt className="h-4 w-4" />
                                                         </Button>
                                                     )}
-                                                    {/* Link to Bill - only for outgoing transactions */}
+                                                    {/* Link to Bill / Show Linked Bill - only for outgoing transactions */}
                                                     {t.amount < 0 && (
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className={`h-8 w-8 ${t.linked_payable_id ? 'text-cyan-600' : 'text-muted-foreground'} hover:text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-950/30`}
-                                                            onClick={() => {
-                                                                setLinkingPayableTx(t)
-                                                                setIsPayableLinkModalOpen(true)
-                                                            }}
-                                                            title={t.linked_payable_id ? "Linked to Payable" : "Link to Payable"}
-                                                        >
-                                                            <FileText className="h-4 w-4" />
-                                                        </Button>
+                                                        t.payables ? (
+                                                            // Show linked bill badge when linked
+                                                            <button
+                                                                onClick={() => {
+                                                                    setLinkingPayableTx(t)
+                                                                    setIsPayableLinkModalOpen(true)
+                                                                }}
+                                                                className="group flex items-center gap-1.5 px-2 py-1 rounded-full bg-cyan-500/10 text-cyan-600 hover:bg-cyan-500/20 transition-colors text-[10px] font-semibold"
+                                                                title={`Linked to: ${t.payables.name} - £${Number(t.payables.amount).toFixed(2)}`}
+                                                            >
+                                                                <FileText className="h-3 w-3" />
+                                                                <span className="max-w-[80px] truncate">{t.payables.name}</span>
+                                                            </button>
+                                                        ) : (
+                                                            // Show link button when not linked
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className="h-8 w-8 text-muted-foreground hover:text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-950/30"
+                                                                onClick={() => {
+                                                                    setLinkingPayableTx(t)
+                                                                    setIsPayableLinkModalOpen(true)
+                                                                }}
+                                                                title="Link to Payable"
+                                                            >
+                                                                <FileText className="h-4 w-4" />
+                                                            </Button>
+                                                        )
                                                     )}
                                                     <Button
                                                         variant="ghost"
@@ -1395,6 +1411,40 @@ export default function TransactionsPage() {
                             <p className="text-lg font-bold text-destructive">-£{Math.abs(linkingPayableTx.amount).toFixed(2)}</p>
                             <p className="text-xs text-muted-foreground">{new Date(linkingPayableTx.transaction_date).toLocaleDateString()}</p>
                         </div>
+
+                        {/* Show Currently Linked Payable */}
+                        {linkingPayableTx.payables && (
+                            <div className="mb-4 p-3 bg-cyan-50 dark:bg-cyan-950/30 rounded-lg border border-cyan-200 dark:border-cyan-800">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-xs font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-wide">Currently Linked To</p>
+                                        <p className="text-sm font-bold mt-1">{linkingPayableTx.payables.name}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                            £{Number(linkingPayableTx.payables.amount).toFixed(2)} • {new Date(linkingPayableTx.payables.next_due).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                        </p>
+                                    </div>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-800 dark:hover:bg-rose-950/30"
+                                        onClick={async () => {
+                                            try {
+                                                await unlinkTransactionFromPayable(linkingPayableTx.id)
+                                                setIsPayableLinkModalOpen(false)
+                                                setLinkingPayableTx(null)
+                                                fetchTransactions()
+                                                fetchPayables()
+                                                alert('Transaction unlinked successfully!')
+                                            } catch (e) {
+                                                alert('Failed to unlink: ' + e)
+                                            }
+                                        }}
+                                    >
+                                        Unlink
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="mb-4">
                             <label className="text-sm font-bold text-muted-foreground mb-2 block">Search & Select Payable</label>
