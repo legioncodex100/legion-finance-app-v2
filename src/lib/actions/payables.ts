@@ -272,8 +272,38 @@ export async function deletePayable(id: string) {
     return { success: true }
 }
 
-// ============= Reconciliation =============
+// ============= Reconciliation (Multi-Transaction Support) =============
 
+export interface PayableTransaction {
+    id: string
+    payable_id: string
+    transaction_id: string
+    amount: number
+    notes: string | null
+    linked_at: string
+}
+
+/**
+ * Get all transactions linked to a payable
+ */
+export async function getPayableTransactions(payableId: string): Promise<PayableTransaction[]> {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("Unauthorized")
+
+    const { data, error } = await supabase
+        .from('payable_transactions')
+        .select('*, transactions(transaction_date, amount, description, counterparty_name)')
+        .eq('payable_id', payableId)
+        .order('linked_at', { ascending: false })
+
+    if (error) throw error
+    return data || []
+}
+
+/**
+ * Link a transaction to a payable (supports multiple transactions)
+ */
 export async function linkPayableToTransaction(payableId: string, transactionId: string) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -295,24 +325,44 @@ export async function linkPayableToTransaction(payableId: string, transactionId:
         .eq('id', transactionId)
         .single()
 
-    const paidDate = transaction?.transaction_date || new Date().toISOString().split('T')[0]
-    const paymentAmount = Math.abs(Number(transaction?.amount || 0))
+    if (!transaction) throw new Error("Transaction not found")
 
-    // Calculate new amount_paid
-    const currentPaid = Number(payable.amount_paid || 0)
-    const newAmountPaid = currentPaid + paymentAmount
+    const paidDate = transaction.transaction_date || new Date().toISOString().split('T')[0]
+    const paymentAmount = Math.abs(Number(transaction.amount || 0))
+
+    // Insert into junction table
+    const { error: junctionError } = await supabase
+        .from('payable_transactions')
+        .insert({
+            payable_id: payableId,
+            transaction_id: transactionId,
+            amount: paymentAmount,
+            linked_by: user.id
+        })
+
+    if (junctionError) {
+        if (junctionError.code === '23505') {
+            throw new Error("This transaction is already linked to this bill")
+        }
+        throw junctionError
+    }
+
+    // Calculate new amount_paid from all linked transactions
+    const { data: allLinks } = await supabase
+        .from('payable_transactions')
+        .select('amount')
+        .eq('payable_id', payableId)
+
+    const totalPaid = (allLinks || []).reduce((sum, link) => sum + Number(link.amount), 0)
     const totalAmount = Number(payable.amount)
+    const isFullyPaid = totalPaid >= totalAmount
 
-    // Determine if fully paid
-    const isFullyPaid = newAmountPaid >= totalAmount
-
-    // Update payable
+    // Update payable with new totals
     const { error: payableError } = await supabase
         .from('payables')
         .update({
-            linked_transaction_id: transactionId,
-            amount_paid: newAmountPaid,
-            bill_status: isFullyPaid ? 'paid' : 'scheduled', // Keep as scheduled if partial
+            amount_paid: totalPaid,
+            bill_status: isFullyPaid ? 'paid' : 'scheduled',
             is_paid: isFullyPaid,
             reconciled_at: isFullyPaid ? new Date().toISOString() : null,
             last_paid_date: paidDate
@@ -335,7 +385,7 @@ export async function linkPayableToTransaction(payableId: string, transactionId:
 
     if (txnError) throw txnError
 
-    return { success: true }
+    return { success: true, totalPaid, isFullyPaid }
 }
 
 /**
@@ -347,20 +397,43 @@ export async function linkPayableRetroactive(payableId: string, transactionId: s
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    // Fetch transaction date to use as paid date
+    // Fetch transaction to get amount and date
     const { data: transaction } = await supabase
         .from('transactions')
-        .select('transaction_date')
+        .select('transaction_date, amount')
         .eq('id', transactionId)
         .single()
 
     const paidDate = transaction?.transaction_date || new Date().toISOString().split('T')[0]
+    const paymentAmount = Math.abs(Number(transaction?.amount || 0))
 
-    // Update payable with the link, reconciled timestamp, and paid date from transaction
+    // Insert into junction table
+    const { error: junctionError } = await supabase
+        .from('payable_transactions')
+        .insert({
+            payable_id: payableId,
+            transaction_id: transactionId,
+            amount: paymentAmount,
+            linked_by: user.id
+        })
+
+    if (junctionError && junctionError.code !== '23505') {
+        throw junctionError
+    }
+
+    // Calculate new amount_paid from all linked transactions
+    const { data: allLinks } = await supabase
+        .from('payable_transactions')
+        .select('amount')
+        .eq('payable_id', payableId)
+
+    const totalPaid = (allLinks || []).reduce((sum, link) => sum + Number(link.amount), 0)
+
+    // Update payable with recalculated amount_paid
     const { error: payableError } = await supabase
         .from('payables')
         .update({
-            linked_transaction_id: transactionId,
+            amount_paid: totalPaid,
             reconciled_at: new Date().toISOString(),
             last_paid_date: paidDate
         })
@@ -385,38 +458,104 @@ export async function linkPayableRetroactive(payableId: string, transactionId: s
     return { success: true }
 }
 
+/**
+ * Unlink a specific transaction from a payable
+ */
+export async function unlinkTransactionFromPayable(payableId: string, transactionId: string) {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("Unauthorized")
+
+    // Remove from junction table
+    const { error: deleteError } = await supabase
+        .from('payable_transactions')
+        .delete()
+        .eq('payable_id', payableId)
+        .eq('transaction_id', transactionId)
+
+    if (deleteError) throw deleteError
+
+    // Unlink transaction
+    await supabase
+        .from('transactions')
+        .update({ linked_payable_id: null, reconciliation_status: 'unreconciled' })
+        .eq('id', transactionId)
+        .eq('user_id', user.id)
+
+    // Recalculate total paid from remaining links
+    const { data: remainingLinks } = await supabase
+        .from('payable_transactions')
+        .select('amount')
+        .eq('payable_id', payableId)
+
+    const totalPaid = (remainingLinks || []).reduce((sum, link) => sum + Number(link.amount), 0)
+
+    // Fetch payable to check if still fully paid
+    const { data: payable } = await supabase
+        .from('payables')
+        .select('amount')
+        .eq('id', payableId)
+        .single()
+
+    const totalAmount = Number(payable?.amount || 0)
+    const isFullyPaid = totalPaid >= totalAmount && totalPaid > 0
+
+    // Update payable
+    const { error: updateError } = await supabase
+        .from('payables')
+        .update({
+            amount_paid: totalPaid,
+            bill_status: isFullyPaid ? 'paid' : 'scheduled',
+            is_paid: isFullyPaid,
+            reconciled_at: isFullyPaid ? new Date().toISOString() : null
+        })
+        .eq('id', payableId)
+        .eq('user_id', user.id)
+
+    if (updateError) throw updateError
+
+    return { success: true, totalPaid, isFullyPaid }
+}
+
+/**
+ * Unlink ALL transactions from a payable (reset bill)
+ */
 export async function unlinkPayableFromTransaction(payableId: string) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    // Get the linked transaction first
-    const { data: payable } = await supabase
-        .from('payables')
-        .select('linked_transaction_id')
-        .eq('id', payableId)
-        .eq('user_id', user.id)
-        .single()
+    // Get all linked transactions
+    const { data: links } = await supabase
+        .from('payable_transactions')
+        .select('transaction_id')
+        .eq('payable_id', payableId)
 
-    if (payable?.linked_transaction_id) {
-        // Unlink transaction
+    // Unlink all transactions
+    if (links && links.length > 0) {
+        const txIds = links.map(l => l.transaction_id)
         await supabase
             .from('transactions')
             .update({ linked_payable_id: null, reconciliation_status: 'unreconciled' })
-            .eq('id', payable.linked_transaction_id)
+            .in('id', txIds)
             .eq('user_id', user.id)
     }
 
-    // Update payable
+    // Delete all junction records
+    await supabase
+        .from('payable_transactions')
+        .delete()
+        .eq('payable_id', payableId)
+
+    // Reset payable
     const { error } = await supabase
         .from('payables')
         .update({
-            linked_transaction_id: null,
-            amount_paid: 0,  // Reset partial payment tracking
+            amount_paid: 0,
             bill_status: 'scheduled',
             is_paid: false,
             reconciled_at: null,
-            last_paid_date: null  // Also reset paid date
+            last_paid_date: null
         })
         .eq('id', payableId)
         .eq('user_id', user.id)
