@@ -598,8 +598,8 @@ export default function CashFlowPage() {
                                                             <td className={`py-3 px-4 text-right text-sm font-medium tabular-nums ${week.netCashFlow >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                                                                 {week.netCashFlow >= 0 ? '+' : ''}£{formatCurrency(week.netCashFlow)}
                                                             </td>
-                                                            <td className="py-3 px-4 text-right font-bold tabular-nums text-muted-foreground">
-                                                                —
+                                                            <td className="py-3 px-4 text-right font-bold tabular-nums">
+                                                                £{formatCurrency(week.runningBalance)}
                                                             </td>
                                                             <td className="py-3 px-4 text-center">
                                                                 <span className="text-xs bg-cyan-100 dark:bg-cyan-900 text-cyan-700 dark:text-cyan-300 px-2 py-1 rounded">Actual</span>

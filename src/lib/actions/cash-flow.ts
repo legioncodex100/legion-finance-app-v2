@@ -448,6 +448,7 @@ export interface HistoricalWeek {
     actualInflows: number
     actualOutflows: number
     netCashFlow: number
+    runningBalance: number
     isActual: true
     sources: {
         income: { source: string; amount: number }[]
@@ -461,7 +462,8 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    const historical: HistoricalWeek[] = []
+    if (weeksBack === 0) return []
+
     const today = new Date()
     today.setHours(0, 0, 0, 0)
 
@@ -484,7 +486,23 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
         .lt('transaction_date', currentWeekStart.toISOString().split('T')[0])
         .order('transaction_date', { ascending: true })
 
-    // Group transactions by week
+    // Get current balance to work backwards
+    const currentBalance = await getCurrentBankBalance()
+
+    // Calculate total net from historical weeks to work backwards
+    let totalHistoricalNet = 0
+    const weeklyData: Array<{
+        weekNumber: number
+        weekStart: Date
+        weekEnd: Date
+        actualInflows: number
+        actualOutflows: number
+        netCashFlow: number
+        incomeSources: { source: string; amount: number }[]
+        expenseSources: { source: string; amount: number }[]
+    }> = []
+
+    // First pass: calculate each week's net
     for (let w = weeksBack; w >= 1; w--) {
         const weekStart = new Date(currentWeekStart)
         weekStart.setDate(currentWeekStart.getDate() - (w * 7))
@@ -492,7 +510,6 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
         const weekEnd = new Date(weekStart)
         weekEnd.setDate(weekStart.getDate() + 6)
 
-        // Filter transactions for this week
         const weekTransactions = transactions?.filter(tx => {
             const txDate = new Date(tx.transaction_date)
             return txDate >= weekStart && txDate <= weekEnd
@@ -509,7 +526,6 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
 
             if (Number(tx.amount) > 0) {
                 actualInflows += amount
-                // Don't duplicate - group by source
                 const existing = incomeSources.find(s => s.source === source)
                 if (existing) {
                     existing.amount += amount
@@ -527,17 +543,45 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
             }
         })
 
-        historical.push({
-            weekNumber: -w, // Negative to indicate past weeks
+        const netCashFlow = actualInflows - actualOutflows
+        totalHistoricalNet += netCashFlow
+
+        weeklyData.push({
+            weekNumber: -w,
             weekStart,
             weekEnd,
             actualInflows,
             actualOutflows,
-            netCashFlow: actualInflows - actualOutflows,
+            netCashFlow,
+            incomeSources,
+            expenseSources
+        })
+    }
+
+    // Calculate balance at the START of the historical period
+    // currentBalance = startBalance + totalHistoricalNet + currentWeekNet
+    // Since we don't have currentWeekNet yet, we approximate:
+    // Balance at end of each historical week = currentBalance - (sum of all subsequent weeks' nets)
+    const historical: HistoricalWeek[] = []
+    let cumulativeNet = 0
+
+    for (const week of weeklyData) {
+        cumulativeNet += week.netCashFlow
+        // Balance at end of this week = currentBalance - (totalHistoricalNet - cumulativeNet up to this week)
+        const runningBalance = currentBalance - totalHistoricalNet + cumulativeNet
+
+        historical.push({
+            weekNumber: week.weekNumber,
+            weekStart: week.weekStart,
+            weekEnd: week.weekEnd,
+            actualInflows: week.actualInflows,
+            actualOutflows: week.actualOutflows,
+            netCashFlow: week.netCashFlow,
+            runningBalance,
             isActual: true,
             sources: {
-                income: incomeSources.slice(0, 5), // Top 5 sources
-                expenses: expenseSources.slice(0, 5)
+                income: week.incomeSources.slice(0, 5),
+                expenses: week.expenseSources.slice(0, 5)
             }
         })
     }
