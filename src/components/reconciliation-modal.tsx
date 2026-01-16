@@ -111,6 +111,7 @@ export function ReconciliationModal({
     const [payableId, setPayableId] = React.useState<string | null>(null)
     const [payableSearch, setPayableSearch] = React.useState('')
     const [payableDropdownOpen, setPayableDropdownOpen] = React.useState(false)
+    const [linkedPayableDetails, setLinkedPayableDetails] = React.useState<any>(null)
 
     // Sync state when transaction changes or modal opens
     React.useEffect(() => {
@@ -223,6 +224,21 @@ export function ReconciliationModal({
             console.log('[RECONCILE MODAL] Transaction amount:', transaction.amount, 'isExpense:', transaction.amount < 0)
             if (transaction.amount < 0) {
                 fetchPayablesData()
+            }
+            // Fetch linked payable details if transaction is already linked
+            if (transaction.linked_payable_id) {
+                const fetchLinkedPayable = async () => {
+                    const supabase = (await import('@/lib/supabase/client')).createClient()
+                    const { data } = await supabase
+                        .from('payables')
+                        .select('id, name, amount, next_due, vendor_name, staff_name')
+                        .eq('id', transaction.linked_payable_id)
+                        .single()
+                    if (data) setLinkedPayableDetails(data)
+                }
+                fetchLinkedPayable()
+            } else {
+                setLinkedPayableDetails(null)
             }
             setPayableId(transaction.linked_payable_id || null)
             setPayableSearch('')
@@ -864,15 +880,18 @@ export function ReconciliationModal({
                             </Label>
 
                             {/* Show Currently Linked Payable */}
-                            {transaction.linked_payable_id && (
+                            {transaction.linked_payable_id && linkedPayableDetails && (
                                 <div className="p-3 bg-cyan-50 dark:bg-cyan-950/30 rounded-lg border border-cyan-200 dark:border-cyan-800">
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <p className="text-[10px] font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-wide">Currently Linked To</p>
                                             <p className="text-sm font-bold mt-0.5">
-                                                {payables.find(p => p.id === transaction.linked_payable_id)?.name ||
-                                                    payables.find(p => p.id === transaction.linked_payable_id)?.vendor_name ||
-                                                    'Linked Payable'}
+                                                {linkedPayableDetails.name || linkedPayableDetails.vendor_name || linkedPayableDetails.staff_name || 'Payable'}
+                                            </p>
+                                            <p className="text-xs text-muted-foreground">
+                                                £{Number(linkedPayableDetails.amount).toFixed(2)} • Due: {linkedPayableDetails.next_due
+                                                    ? new Date(linkedPayableDetails.next_due).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                                                    : 'N/A'}
                                             </p>
                                         </div>
                                         <Button
@@ -882,6 +901,7 @@ export function ReconciliationModal({
                                             onClick={async () => {
                                                 try {
                                                     await unlinkTransactionFromPayable(transaction.id)
+                                                    setLinkedPayableDetails(null)
                                                     onUpdate()
                                                     onOpenChange(false)
                                                 } catch (e) {
