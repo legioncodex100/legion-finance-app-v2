@@ -7,12 +7,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     analyzeHistoricalPatterns,
     generateForecast,
+    generateHistoricalWeeks,
     getDataFreshness,
     getCurrentBankBalance,
     getPatternInsights,
     getUserSettings,
     setOpeningBalance,
     type ForecastWeek,
+    type HistoricalWeek,
     type DataFreshness
 } from "@/lib/actions/cash-flow"
 import { syncMindbodyScheduledPayments } from "@/lib/actions/mindbody-bi"
@@ -40,6 +42,8 @@ export default function CashFlowPage() {
     const [balanceInput, setBalanceInput] = React.useState('')
     const [isSavingBalance, setIsSavingBalance] = React.useState(false)
     const [expandedWeeks, setExpandedWeeks] = React.useState<Set<number>>(new Set())
+    const [historicalWeeks, setHistoricalWeeks] = React.useState<HistoricalWeek[]>([])
+    const [showHistory, setShowHistory] = React.useState(4) // Number of past weeks to show
 
     // Calendar tab state
     const [activeTab, setActiveTab] = React.useState<TabType>('forecast')
@@ -81,12 +85,13 @@ export default function CashFlowPage() {
     const loadData = React.useCallback(async () => {
         setIsLoading(true)
         try {
-            const [forecastData, balance, freshness, insightsData, settings] = await Promise.all([
+            const [forecastData, balance, freshness, insightsData, settings, historyData] = await Promise.all([
                 generateForecast(timeframe),
                 getCurrentBankBalance(),
                 getDataFreshness(),
                 getPatternInsights(),
-                getUserSettings()
+                getUserSettings(),
+                generateHistoricalWeeks(showHistory)
             ])
             console.log('[CashFlow UI] balance received:', balance, 'forecastWeek1:', forecastData[0]?.runningBalance)
             setForecast(forecastData)
@@ -94,11 +99,12 @@ export default function CashFlowPage() {
             setDataFreshness(freshness)
             setInsights(insightsData)
             setOpeningBalanceState(settings.openingBalance)
+            setHistoricalWeeks(historyData)
         } catch (e) {
             console.error('Error loading cash flow data:', e)
         }
         setIsLoading(false)
-    }, [timeframe])
+    }, [timeframe, showHistory])
 
     React.useEffect(() => {
         loadData()
@@ -514,19 +520,33 @@ export default function CashFlowPage() {
                                 {t} Weeks
                             </button>
                         ))}
+                        <span className="mx-4 text-zinc-300 dark:text-zinc-700">|</span>
+                        <span className="text-sm text-muted-foreground mr-2">History:</span>
+                        {([0, 4, 8] as const).map(h => (
+                            <button
+                                key={h}
+                                onClick={() => setShowHistory(h)}
+                                className={`px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${showHistory === h
+                                    ? 'bg-cyan-600 text-white'
+                                    : 'bg-zinc-100 dark:bg-zinc-800 text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                {h === 0 ? 'None' : `${h}w`}
+                            </button>
+                        ))}
                     </div>
 
                     {/* Forecast Table */}
                     <Card>
                         <CardHeader>
-                            <CardTitle>Weekly Forecast</CardTitle>
+                            <CardTitle>Weekly Cash Flow</CardTitle>
                         </CardHeader>
                         <CardContent>
                             {isLoading ? (
                                 <div className="flex items-center justify-center py-12">
                                     <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                                 </div>
-                            ) : forecast.length === 0 ? (
+                            ) : forecast.length === 0 && historicalWeeks.length === 0 ? (
                                 <div className="text-center py-12 text-muted-foreground">
                                     <p>No forecast data yet.</p>
                                     <p className="text-sm">Click "Analyze Patterns" to generate a forecast from your historical data.</p>
@@ -546,6 +566,95 @@ export default function CashFlowPage() {
                                             </tr>
                                         </thead>
                                         <tbody>
+                                            {/* Historical Weeks (Actuals) */}
+                                            {historicalWeeks.map(week => {
+                                                const isExpanded = expandedWeeks.has(week.weekNumber)
+                                                const hasDetails = (week.sources?.income?.length || 0) > 0 || (week.sources?.expenses?.length || 0) > 0
+                                                return (
+                                                    <React.Fragment key={week.weekNumber}>
+                                                        <tr
+                                                            onClick={() => hasDetails && toggleWeek(week.weekNumber)}
+                                                            className={`border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 bg-cyan-50/30 dark:bg-cyan-950/10 ${hasDetails ? 'cursor-pointer' : ''}`}
+                                                        >
+                                                            <td className="py-3 px-4 font-medium">
+                                                                <div className="flex items-center gap-2">
+                                                                    {hasDetails && (
+                                                                        isExpanded
+                                                                            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                                                            : <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                                                    )}
+                                                                    W{week.weekNumber}
+                                                                </div>
+                                                            </td>
+                                                            <td className="py-3 px-4 text-sm text-muted-foreground">
+                                                                {formatDate(week.weekStart)} - {formatDate(week.weekEnd)}
+                                                            </td>
+                                                            <td className="py-3 px-4 text-right text-sm text-emerald-600 dark:text-emerald-400 tabular-nums">
+                                                                +£{formatCurrency(week.actualInflows)}
+                                                            </td>
+                                                            <td className="py-3 px-4 text-right text-sm text-red-600 dark:text-red-400 tabular-nums">
+                                                                -£{formatCurrency(week.actualOutflows)}
+                                                            </td>
+                                                            <td className={`py-3 px-4 text-right text-sm font-medium tabular-nums ${week.netCashFlow >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                                {week.netCashFlow >= 0 ? '+' : ''}£{formatCurrency(week.netCashFlow)}
+                                                            </td>
+                                                            <td className="py-3 px-4 text-right font-bold tabular-nums text-muted-foreground">
+                                                                —
+                                                            </td>
+                                                            <td className="py-3 px-4 text-center">
+                                                                <span className="text-xs bg-cyan-100 dark:bg-cyan-900 text-cyan-700 dark:text-cyan-300 px-2 py-1 rounded">Actual</span>
+                                                            </td>
+                                                        </tr>
+                                                        {isExpanded && hasDetails && (
+                                                            <tr className="bg-cyan-50/50 dark:bg-cyan-950/20">
+                                                                <td colSpan={7} className="py-3 px-4">
+                                                                    <div className="grid grid-cols-2 gap-8 ml-6">
+                                                                        <div>
+                                                                            <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 mb-2">INFLOWS</p>
+                                                                            {week.sources?.income?.length ? (
+                                                                                <ul className="space-y-1">
+                                                                                    {week.sources.income.map((s, i) => (
+                                                                                        <li key={i} className="flex justify-between text-sm">
+                                                                                            <span className="text-muted-foreground truncate max-w-[200px]">{s.source}</span>
+                                                                                            <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">+£{formatCurrency(s.amount)}</span>
+                                                                                        </li>
+                                                                                    ))}
+                                                                                </ul>
+                                                                            ) : (
+                                                                                <p className="text-xs text-muted-foreground italic">No inflows</p>
+                                                                            )}
+                                                                        </div>
+                                                                        <div>
+                                                                            <p className="text-xs font-semibold text-red-600 dark:text-red-400 mb-2">OUTFLOWS</p>
+                                                                            {week.sources?.expenses?.length ? (
+                                                                                <ul className="space-y-1">
+                                                                                    {week.sources.expenses.map((s, i) => (
+                                                                                        <li key={i} className="flex justify-between text-sm">
+                                                                                            <span className="text-muted-foreground truncate max-w-[200px]">{s.source}</span>
+                                                                                            <span className="text-red-600 dark:text-red-400 tabular-nums">-£{formatCurrency(s.amount)}</span>
+                                                                                        </li>
+                                                                                    ))}
+                                                                                </ul>
+                                                                            ) : (
+                                                                                <p className="text-xs text-muted-foreground italic">No outflows</p>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        )}
+                                                    </React.Fragment>
+                                                )
+                                            })}
+                                            {/* Separator if showing both */}
+                                            {historicalWeeks.length > 0 && forecast.length > 0 && (
+                                                <tr className="bg-zinc-200 dark:bg-zinc-700">
+                                                    <td colSpan={7} className="py-1 text-center text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                                                        ← Past | Future →
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            {/* Forecast Weeks */}
                                             {forecast.map(week => {
                                                 const isExpanded = expandedWeeks.has(week.weekNumber)
                                                 const hasDetails = (week.sources?.income?.length || 0) > 0 || (week.sources?.expenses?.length || 0) > 0
@@ -807,8 +916,8 @@ export default function CashFlowPage() {
                                                     <div
                                                         key={dayInfo.dateStr}
                                                         className={`min-h-[100px] border rounded p-1 transition-colors ${dayInfo.isCurrentMonth
-                                                                ? 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
-                                                                : 'border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30'
+                                                            ? 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
+                                                            : 'border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30'
                                                             }`}
                                                         onDragOver={(e) => e.preventDefault()}
                                                         onDrop={() => handleDrop(dayInfo.dateStr)}

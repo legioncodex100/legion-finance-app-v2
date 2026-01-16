@@ -185,11 +185,32 @@ export async function analyzeHistoricalPatterns(): Promise<{ success: boolean; p
     return { success: true, patternsCreated }
 }
 
-// Get current bank balance (sum of all transactions including opening balance)
+// Get current bank balance (from Starling API first, fall back to transaction sum)
 export async function getCurrentBankBalance(): Promise<number> {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
+
+    // Try to get live balance from Starling API first
+    try {
+        const { getStarlingBalance } = await import('./starling')
+        const starlingBalance = await getStarlingBalance()
+        if (starlingBalance) {
+            console.log('[CashFlow] getCurrentBankBalance from Starling:', starlingBalance.cleared)
+            return starlingBalance.cleared
+        }
+    } catch (e) {
+        console.log('[CashFlow] Could not get Starling balance, falling back to transaction sum')
+    }
+
+    // Fallback: Get user's opening balance + sum of all transactions
+    const { data: settings } = await supabase
+        .from('user_settings')
+        .select('opening_balance')
+        .eq('user_id', user.id)
+        .single()
+
+    const openingBalance = Number(settings?.opening_balance) || 0
 
     // Use direct SQL sum to bypass row limits
     const { data, error } = await supabase.rpc('get_transaction_balance', {
@@ -215,13 +236,16 @@ export async function getCurrentBankBalance(): Promise<number> {
             offset += pageSize
         }
 
-        const balance = allTransactions.reduce((sum, tx) => sum + Number(tx.amount), 0)
-        console.log('[CashFlow] getCurrentBankBalance (paginated):', { txCount: allTransactions.length, balance: balance.toFixed(2) })
+        const txSum = allTransactions.reduce((sum, tx) => sum + Number(tx.amount), 0)
+        const balance = openingBalance + txSum
+        console.log('[CashFlow] getCurrentBankBalance (paginated):', { openingBalance, txSum, balance: balance.toFixed(2) })
         return balance
     }
 
-    console.log('[CashFlow] getCurrentBankBalance (RPC):', data)
-    return Number((data as { balance?: number })?.balance) || 0
+    const txSum = Number((data as { balance?: number })?.balance) || 0
+    const balance = openingBalance + txSum
+    console.log('[CashFlow] getCurrentBankBalance (RPC):', { openingBalance, txSum, balance: balance.toFixed(2) })
+    return balance
 }
 
 // Set opening balance
@@ -426,6 +450,111 @@ export async function generateForecast(weeks: number): Promise<ForecastWeek[]> {
     }
 
     return forecast
+}
+
+// Historical week type (with actuals)
+export interface HistoricalWeek {
+    weekNumber: number
+    weekStart: Date
+    weekEnd: Date
+    actualInflows: number
+    actualOutflows: number
+    netCashFlow: number
+    isActual: true
+    sources: {
+        income: { source: string; amount: number }[]
+        expenses: { source: string; amount: number }[]
+    }
+}
+
+// Generate historical weeks with actual transaction data
+export async function generateHistoricalWeeks(weeksBack: number): Promise<HistoricalWeek[]> {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("Unauthorized")
+
+    const historical: HistoricalWeek[] = []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    // Calculate the start of the current week (Monday)
+    const dayOfWeek = today.getDay()
+    const diffToMonday = (dayOfWeek === 0 ? 6 : dayOfWeek - 1)
+    const currentWeekStart = new Date(today)
+    currentWeekStart.setDate(today.getDate() - diffToMonday)
+
+    // Go back N weeks from current week start
+    const startDate = new Date(currentWeekStart)
+    startDate.setDate(startDate.getDate() - (weeksBack * 7))
+
+    // Fetch all transactions in the historical range
+    const { data: transactions } = await supabase
+        .from('transactions')
+        .select('id, transaction_date, amount, raw_party, description, type')
+        .eq('user_id', user.id)
+        .gte('transaction_date', startDate.toISOString().split('T')[0])
+        .lt('transaction_date', currentWeekStart.toISOString().split('T')[0])
+        .order('transaction_date', { ascending: true })
+
+    // Group transactions by week
+    for (let w = weeksBack; w >= 1; w--) {
+        const weekStart = new Date(currentWeekStart)
+        weekStart.setDate(currentWeekStart.getDate() - (w * 7))
+
+        const weekEnd = new Date(weekStart)
+        weekEnd.setDate(weekStart.getDate() + 6)
+
+        // Filter transactions for this week
+        const weekTransactions = transactions?.filter(tx => {
+            const txDate = new Date(tx.transaction_date)
+            return txDate >= weekStart && txDate <= weekEnd
+        }) || []
+
+        const incomeSources: { source: string; amount: number }[] = []
+        const expenseSources: { source: string; amount: number }[] = []
+        let actualInflows = 0
+        let actualOutflows = 0
+
+        weekTransactions.forEach(tx => {
+            const amount = Math.abs(Number(tx.amount))
+            const source = tx.raw_party || tx.description || 'Transaction'
+
+            if (Number(tx.amount) > 0) {
+                actualInflows += amount
+                // Don't duplicate - group by source
+                const existing = incomeSources.find(s => s.source === source)
+                if (existing) {
+                    existing.amount += amount
+                } else {
+                    incomeSources.push({ source, amount })
+                }
+            } else {
+                actualOutflows += amount
+                const existing = expenseSources.find(s => s.source === source)
+                if (existing) {
+                    existing.amount += amount
+                } else {
+                    expenseSources.push({ source, amount })
+                }
+            }
+        })
+
+        historical.push({
+            weekNumber: -w, // Negative to indicate past weeks
+            weekStart,
+            weekEnd,
+            actualInflows,
+            actualOutflows,
+            netCashFlow: actualInflows - actualOutflows,
+            isActual: true,
+            sources: {
+                income: incomeSources.slice(0, 5), // Top 5 sources
+                expenses: expenseSources.slice(0, 5)
+            }
+        })
+    }
+
+    return historical
 }
 
 // Get data freshness status
