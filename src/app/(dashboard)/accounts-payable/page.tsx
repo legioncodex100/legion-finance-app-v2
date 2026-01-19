@@ -34,9 +34,9 @@ import {
     type Payable,
     type PayeeType,
     type BillStatus,
-    type Frequency
+    type Frequency,
+    unlinkTransactionFromPayable as unlinkPayableTransaction
 } from "@/lib/actions/payables"
-import { unlinkTransactionFromPayable } from "@/lib/actions/transactions"
 import { createClient } from "@/lib/supabase/client"
 
 export default function AccountsPayablePage() {
@@ -94,6 +94,8 @@ export default function AccountsPayablePage() {
     const [loadingTxns, setLoadingTxns] = React.useState(false)
     const [txnSearch, setTxnSearch] = React.useState('')
     const [isRetroactiveLink, setIsRetroactiveLink] = React.useState(false)
+    const [selectedTxnIds, setSelectedTxnIds] = React.useState<Set<string>>(new Set())
+    const [isLinking, setIsLinking] = React.useState(false)
 
     // Detail modal
     const [detailModalOpen, setDetailModalOpen] = React.useState(false)
@@ -262,6 +264,7 @@ export default function AccountsPayablePage() {
         setLinkModalOpen(true)
         setLoadingTxns(true)
         setTxnSearch('')
+        setSelectedTxnIds(new Set()) // Reset selection
         // Fetch ALL expense transactions (include those with old bill_id links)
         const { data } = await supabase
             .from('transactions')
@@ -274,17 +277,40 @@ export default function AccountsPayablePage() {
         setLoadingTxns(false)
     }
 
-    const handleLinkTransaction = async (transactionId: string) => {
-        if (!linkingPayable) return
-        if (isRetroactiveLink) {
-            await linkPayableRetroactive(linkingPayable.id, transactionId)
-        } else {
-            await linkPayableToTransaction(linkingPayable.id, transactionId)
+    const handleLinkTransactions = async () => {
+        if (!linkingPayable || selectedTxnIds.size === 0) return
+        setIsLinking(true)
+        try {
+            // Link each selected transaction sequentially
+            for (const transactionId of selectedTxnIds) {
+                if (isRetroactiveLink) {
+                    await linkPayableRetroactive(linkingPayable.id, transactionId)
+                } else {
+                    await linkPayableToTransaction(linkingPayable.id, transactionId)
+                }
+            }
+            setLinkModalOpen(false)
+            setLinkingPayable(null)
+            setIsRetroactiveLink(false)
+            setSelectedTxnIds(new Set())
+            fetchData()
+        } catch (e) {
+            console.error('Error linking transactions:', e)
+        } finally {
+            setIsLinking(false)
         }
-        setLinkModalOpen(false)
-        setLinkingPayable(null)
-        setIsRetroactiveLink(false)
-        fetchData()
+    }
+
+    const toggleTxnSelection = (txnId: string) => {
+        setSelectedTxnIds(prev => {
+            const next = new Set(prev)
+            if (next.has(txnId)) {
+                next.delete(txnId)
+            } else {
+                next.add(txnId)
+            }
+            return next
+        })
     }
 
     const openLinkModalForPaid = async (payable: Payable) => {
@@ -293,6 +319,7 @@ export default function AccountsPayablePage() {
         setLinkModalOpen(true)
         setLoadingTxns(true)
         setTxnSearch('')
+        setSelectedTxnIds(new Set()) // Reset selection
         // For retroactive linking, show reconciled expense transactions too
         const { data } = await supabase
             .from('transactions')
@@ -1343,7 +1370,7 @@ export default function AccountsPayablePage() {
                                                     className="mt-2 w-full h-7 text-xs border-rose-800 text-rose-400 hover:bg-rose-900/30"
                                                     onClick={async () => {
                                                         if (!confirm(`Unlink this £${Math.abs(tx.link_amount || tx.amount).toFixed(2)} transaction?`)) return
-                                                        await unlinkTransactionFromPayable(tx.id)
+                                                        await unlinkPayableTransaction(selectedPayable.id, tx.id)
                                                         openDetailModal(selectedPayable)
                                                         fetchData()
                                                     }}
@@ -1391,64 +1418,115 @@ export default function AccountsPayablePage() {
             )}
 
             {/* Link Transaction Modal */}
-            {linkModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-                    <div className="w-full max-w-xl bg-zinc-950 rounded-2xl border border-zinc-800 shadow-2xl overflow-hidden">
-                        <div className="p-6 border-b border-zinc-900 flex justify-between items-center">
-                            <h2 className="text-xl font-bold">Link to Transaction</h2>
-                            <button onClick={() => { setLinkModalOpen(false); setLinkingPayable(null); }} className="text-zinc-500 hover:text-white">
-                                <X className="h-5 w-5" />
-                            </button>
-                        </div>
-                        <div className="p-6">
-                            {linkingPayable && (
-                                <div className="mb-4 p-3 rounded-lg bg-zinc-900 border border-zinc-800">
-                                    <p className="text-sm text-zinc-400">Linking:</p>
-                                    <p className="font-bold text-white">{linkingPayable.name} - £{linkingPayable.amount.toFixed(2)}</p>
-                                </div>
-                            )}
-                            <div className="mb-4">
-                                <input
-                                    type="text"
-                                    placeholder="Search transactions..."
-                                    value={txnSearch}
-                                    onChange={e => setTxnSearch(e.target.value)}
-                                    className="w-full h-10 px-3 rounded-lg bg-zinc-900 border border-zinc-800 text-white text-sm"
-                                />
+            {linkModalOpen && (() => {
+                const selectedTotal = transactions
+                    .filter(t => selectedTxnIds.has(t.id))
+                    .reduce((sum, t) => sum + Math.abs(t.amount), 0)
+                const remainingAmount = linkingPayable ? linkingPayable.amount - (linkingPayable.amount_paid || 0) : 0
+
+                return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+                        <div className="w-full max-w-xl bg-zinc-950 rounded-2xl border border-zinc-800 shadow-2xl overflow-hidden">
+                            <div className="p-6 border-b border-zinc-900 flex justify-between items-center">
+                                <h2 className="text-xl font-bold">Link to Transaction</h2>
+                                <button onClick={() => { setLinkModalOpen(false); setLinkingPayable(null); setSelectedTxnIds(new Set()); }} className="text-zinc-500 hover:text-white">
+                                    <X className="h-5 w-5" />
+                                </button>
                             </div>
-                            {loadingTxns ? (
-                                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                            ) : transactions.length === 0 ? (
-                                <p className="text-center text-zinc-500 py-8">No transactions available for linking.</p>
-                            ) : (
-                                <div className="max-h-80 overflow-y-auto space-y-2">
-                                    {transactions
-                                        .filter(t => {
-                                            if (!txnSearch) return true
-                                            const search = txnSearch.toLowerCase()
-                                            return (t.description || '').toLowerCase().includes(search) ||
-                                                (t.raw_party || '').toLowerCase().includes(search) ||
-                                                String(Math.abs(t.amount)).includes(search)
-                                        })
-                                        .map(t => (
-                                            <button
-                                                key={t.id}
-                                                onClick={() => handleLinkTransaction(t.id)}
-                                                className="w-full p-3 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-left flex justify-between items-center"
-                                            >
-                                                <div>
-                                                    <p className="text-sm text-white">{t.description || t.raw_party}</p>
-                                                    <p className="text-xs text-zinc-500">{new Date(t.transaction_date).toLocaleDateString('en-GB')}</p>
-                                                </div>
-                                                <span className="font-bold text-red-400">-£{Math.abs(t.amount).toFixed(2)}</span>
-                                            </button>
-                                        ))}
+                            <div className="p-6">
+                                {linkingPayable && (
+                                    <div className="mb-4 p-3 rounded-lg bg-zinc-900 border border-zinc-800">
+                                        <p className="text-sm text-zinc-400">Linking:</p>
+                                        <p className="font-bold text-white">{linkingPayable.name} - £{linkingPayable.amount.toFixed(2)}</p>
+                                        {(linkingPayable.amount_paid || 0) > 0 && (
+                                            <p className="text-xs text-emerald-400 mt-1">Already paid: £{(linkingPayable.amount_paid || 0).toFixed(2)} • Remaining: £{remainingAmount.toFixed(2)}</p>
+                                        )}
+                                    </div>
+                                )}
+                                <div className="mb-4">
+                                    <input
+                                        type="text"
+                                        placeholder="Search transactions..."
+                                        value={txnSearch}
+                                        onChange={e => setTxnSearch(e.target.value)}
+                                        className="w-full h-10 px-3 rounded-lg bg-zinc-900 border border-zinc-800 text-white text-sm"
+                                    />
                                 </div>
-                            )}
+                                {loadingTxns ? (
+                                    <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+                                ) : transactions.length === 0 ? (
+                                    <p className="text-center text-zinc-500 py-8">No transactions available for linking.</p>
+                                ) : (
+                                    <div className="max-h-80 overflow-y-auto space-y-2">
+                                        {transactions
+                                            .filter(t => {
+                                                if (!txnSearch) return true
+                                                const search = txnSearch.toLowerCase()
+                                                return (t.description || '').toLowerCase().includes(search) ||
+                                                    (t.raw_party || '').toLowerCase().includes(search) ||
+                                                    String(Math.abs(t.amount)).includes(search)
+                                            })
+                                            .map(t => {
+                                                const isSelected = selectedTxnIds.has(t.id)
+                                                return (
+                                                    <button
+                                                        key={t.id}
+                                                        onClick={() => toggleTxnSelection(t.id)}
+                                                        className={`w-full p-3 rounded-lg border text-left flex justify-between items-center transition-colors ${isSelected
+                                                            ? 'bg-emerald-900/30 border-emerald-700'
+                                                            : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800'
+                                                            }`}
+                                                    >
+                                                        <div className="flex items-center gap-3">
+                                                            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${isSelected
+                                                                ? 'bg-emerald-500 border-emerald-500'
+                                                                : 'border-zinc-600'
+                                                                }`}>
+                                                                {isSelected && <CheckCircle2 className="h-4 w-4 text-white" />}
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-sm text-white">{t.description || t.raw_party}</p>
+                                                                <p className="text-xs text-zinc-500">{new Date(t.transaction_date).toLocaleDateString('en-GB')}</p>
+                                                            </div>
+                                                        </div>
+                                                        <span className={`font-bold ${isSelected ? 'text-emerald-400' : 'text-red-400'}`}>-£{Math.abs(t.amount).toFixed(2)}</span>
+                                                    </button>
+                                                )
+                                            })}
+                                    </div>
+                                )}
+                            </div>
+                            {/* Footer with selection info and confirm button */}
+                            <div className="p-4 border-t border-zinc-900 bg-zinc-950">
+                                <div className="flex items-center justify-between">
+                                    <div className="text-sm">
+                                        {selectedTxnIds.size > 0 ? (
+                                            <span className="text-emerald-400">
+                                                {selectedTxnIds.size} selected • £{selectedTotal.toFixed(2)}
+                                                {linkingPayable && (
+                                                    <span className="text-zinc-500 ml-2">
+                                                        ({selectedTotal >= remainingAmount ? 'covers bill' : `£${(remainingAmount - selectedTotal).toFixed(2)} remaining`})
+                                                    </span>
+                                                )}
+                                            </span>
+                                        ) : (
+                                            <span className="text-zinc-500">Select transactions to link</span>
+                                        )}
+                                    </div>
+                                    <Button
+                                        onClick={handleLinkTransactions}
+                                        disabled={selectedTxnIds.size === 0 || isLinking}
+                                        className="bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                                    >
+                                        {isLinking && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                        Link {selectedTxnIds.size > 0 ? `${selectedTxnIds.size} Transaction${selectedTxnIds.size > 1 ? 's' : ''}` : 'Transactions'}
+                                    </Button>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            })()}
 
             {/* Generate Bills Modal */}
             {generateBillsModalOpen && (

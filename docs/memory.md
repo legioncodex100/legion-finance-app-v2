@@ -1,6 +1,6 @@
 # Legion Finance App - Build Memory
 
-> **Last Updated:** January 14, 2026  
+> **Last Updated:** January 19, 2026  
 > **Tech Stack:** Next.js 16 + React 19 + Supabase + Tailwind 4 + Google Gemini AI  
 > **Full History:** [docs/archive/2026-01-full-history.md](archive/2026-01-full-history.md)
 
@@ -24,6 +24,7 @@ Legion Finance is a comprehensive business finance management application for sm
 | Cash Flow | Jan 12 | Starling Bank, Forecasting, Calendar |
 | Refactor | Jan 13 | Budget extraction, Vercel deploy, Security |
 | Polish | Jan 14 | Bulk ops, Skills (22), Testing, Logging |
+| Multi-Link | Jan 19 | Multi-select transaction linking for payables |
 
 ---
 
@@ -57,8 +58,9 @@ Legion Finance is a comprehensive business finance management application for sm
 
 ### Bills & Payables
 - Recurring templates (weekly/monthly/quarterly/yearly)
-- Partial payment tracking
-- Transaction linking
+- Partial payment tracking with progress bars
+- **Multi-transaction linking** (select multiple transactions to cover a bill)
+- Junction table (`payable_transactions`) for multiple links per bill
 
 ### Integrations
 - **Starling Bank**: Transaction sync, balance, pot transactions
@@ -85,7 +87,7 @@ Legion Finance is a comprehensive business finance management application for sm
 `transactions`, `categories`, `vendors`, `staff`, `creditors`, `debts`
 
 ### Bills & Budgets
-`payables`, `budget_scenarios`, `budget_items`
+`payables`, `payable_transactions`, `budget_scenarios`, `budget_items`
 
 ### Mindbody
 `mb_members`, `mb_transactions`, `mb_memberships`, `mb_settlements`
@@ -132,7 +134,7 @@ Skills are in `.agent/skills/` - I read them automatically.
 > [!WARNING]
 > **Large Files (150-line rule)**
 > - `transactions/page.tsx` (102KB)
-> - `accounts-payable/page.tsx` (110KB)
+> - `accounts-payable/page.tsx` (117KB)
 > - `reconciliation-modal.tsx` (~1,500 lines)
 
 ---
@@ -155,21 +157,20 @@ Skills are in `.agent/skills/` - I read them automatically.
 > **Transaction Status**  
 > Only `Approved` = revenue. Exclude `Approved (Voided)` and `Credit`.
 
+> [!IMPORTANT]
+> **Payable Unlinking**  
+> Use `unlinkTransactionFromPayable` from `payables.ts` (not `transactions.ts`) - takes both payableId AND transactionId.
+
 ---
 
 ## Recent Session Notes
 
-### January 14, 2026 (PM)
-- Mindbody webhooks: 6 events (`client.created`, `client.updated`, `clientProfileMerger.created`, etc.)
-- Members page (`/members`) with search, filter, profile modal
-- Client merge handling (soft delete, merged transactions appear in winner's history)
-- API & Webhook Logs feature (`api_logs` table, `/settings/logs` page)
-- Service role client for webhook handlers
-- Fixed Supabase 1000-row pagination limit
-- Updated model-bifurcation workflow + implementation-planning skill (23 total skills)
-- **Deployed to production**: `https://legion-finance.vercel.app`
-- Webhook endpoint: `/api/webhooks/mindbody`
-- Created refactor plan (see below)
+### January 19, 2026
+- **Multi-select transaction linking**: Link multiple transactions to a single bill
+- Checkbox UI with running total in Link Transaction modal
+- Fixed unlink button (was using wrong import from transactions.ts)
+- Fixed `last_paid_date` not updating when unlinking transactions
+- Updated `payable_transactions` junction table query to include transaction dates
 
 ---
 

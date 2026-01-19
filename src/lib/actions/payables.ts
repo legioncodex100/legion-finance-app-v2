@@ -482,13 +482,23 @@ export async function unlinkTransactionFromPayable(payableId: string, transactio
         .eq('id', transactionId)
         .eq('user_id', user.id)
 
-    // Recalculate total paid from remaining links
+    // Recalculate total paid from remaining links WITH transaction dates
     const { data: remainingLinks } = await supabase
         .from('payable_transactions')
-        .select('amount')
+        .select('amount, transactions(transaction_date)')
         .eq('payable_id', payableId)
 
     const totalPaid = (remainingLinks || []).reduce((sum, link) => sum + Number(link.amount), 0)
+
+    // Find the most recent transaction date from remaining links
+    let lastPaidDate: string | null = null
+    if (remainingLinks && remainingLinks.length > 0) {
+        const dates = remainingLinks
+            .map(link => (link.transactions as any)?.transaction_date)
+            .filter(Boolean)
+            .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
+        lastPaidDate = dates[0] || null
+    }
 
     // Fetch payable to check if still fully paid
     const { data: payable } = await supabase
@@ -500,14 +510,15 @@ export async function unlinkTransactionFromPayable(payableId: string, transactio
     const totalAmount = Number(payable?.amount || 0)
     const isFullyPaid = totalPaid >= totalAmount && totalPaid > 0
 
-    // Update payable
+    // Update payable with recalculated values
     const { error: updateError } = await supabase
         .from('payables')
         .update({
             amount_paid: totalPaid,
             bill_status: isFullyPaid ? 'paid' : 'scheduled',
             is_paid: isFullyPaid,
-            reconciled_at: isFullyPaid ? new Date().toISOString() : null
+            reconciled_at: isFullyPaid ? new Date().toISOString() : null,
+            last_paid_date: lastPaidDate
         })
         .eq('id', payableId)
         .eq('user_id', user.id)
