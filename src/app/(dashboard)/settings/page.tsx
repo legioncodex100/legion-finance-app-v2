@@ -1,4 +1,4 @@
-import { Zap, Shield, User, Bell, Database, Layers, Bot, RefreshCw, Bug, FileText } from "lucide-react"
+import { Zap, Shield, User, Bell, Database, Layers, Bot, RefreshCw, Bug, FileText, Copy } from "lucide-react"
 import Link from "next/link"
 
 export default function SettingsPage() {
@@ -34,6 +34,14 @@ export default function SettingsPage() {
             href: "/settings/logs",
             color: "text-pink-500",
             bgColor: "bg-pink-100 dark:bg-pink-900/30"
+        },
+        {
+            title: "Duplicate Checker",
+            description: "Scan for and clean up duplicate transactions from CSV imports.",
+            icon: Copy,
+            href: "/settings/duplicates",
+            color: "text-amber-500",
+            bgColor: "bg-amber-100 dark:bg-amber-900/30"
         },
         {
             title: "Financial Classes",

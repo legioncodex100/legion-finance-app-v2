@@ -226,7 +226,7 @@ export async function syncStarlingTransactions(fromDate?: string, toDate?: strin
 }
 
 /**
- * Get current Starling account balance
+ * Get current Starling account balance (including pots/savings goals)
  */
 export async function getStarlingBalance(): Promise<{ cleared: number; available: number } | null> {
     try {
@@ -235,20 +235,89 @@ export async function getStarlingBalance(): Promise<{ cleared: number; available
 
         if (!account) return null
 
-        const balance = await starling.getBalance(account.accountUid)
+        // Use getTotalBalance which includes all savings pots
+        const totalBalance = await starling.getTotalBalance(account.accountUid)
 
+        if (totalBalance === null) return null
+
+        // Return total balance for both cleared and available
+        // (pots are immediately available but held separately)
         return {
-            cleared: StarlingClient.toMajorUnits(balance.clearedBalance.minorUnits),
-            available: StarlingClient.toMajorUnits(balance.availableToSpend.minorUnits),
+            cleared: totalBalance,
+            available: totalBalance,
         }
     } catch {
         return null
     }
 }
 
+
 /**
  * Check if Starling integration is configured
  */
 export async function isStarlingConfigured(): Promise<boolean> {
     return !!process.env.STARLING_ACCESS_TOKEN
+}
+
+export interface PotBalance {
+    name: string
+    balance: number
+    uid: string
+}
+
+export interface StarlingBalanceBreakdown {
+    mainAccountBalance: number
+    pots: PotBalance[]
+    totalBalance: number
+}
+
+/**
+ * Get Starling account balance with pot breakdown
+ */
+export async function getStarlingBalanceBreakdown(): Promise<StarlingBalanceBreakdown | null> {
+    try {
+        const starling = createStarlingClient()
+        const account = await starling.getPrimaryAccount()
+
+        if (!account) return null
+
+        // Get main balance
+        const balance = await starling.getBalance(account.accountUid)
+        const mainAccountBalance = StarlingClient.toMajorUnits(balance.effectiveBalance?.minorUnits || 0)
+
+        const pots: PotBalance[] = []
+
+        // Fetch savings goals
+        try {
+            const response = await starling.getSavingsGoals(account.accountUid) as any
+            const savingsGoals = response?.savingsGoalList || response?.savingsGoals || []
+
+            for (const goal of savingsGoals) {
+                const goalBalance = goal.totalSaved?.minorUnits || 0
+                if (goalBalance > 0) { // Only include pots with money
+                    pots.push({
+                        name: goal.name,
+                        balance: StarlingClient.toMajorUnits(goalBalance),
+                        uid: goal.savingsGoalUid
+                    })
+                }
+            }
+        } catch (e) {
+            console.log('[STARLING] Could not fetch savings goals for breakdown')
+        }
+
+        // Sort pots by balance (highest first)
+        pots.sort((a, b) => b.balance - a.balance)
+
+        const totalBalance = mainAccountBalance + pots.reduce((sum, p) => sum + p.balance, 0)
+
+        return {
+            mainAccountBalance,
+            pots,
+            totalBalance
+        }
+    } catch (e) {
+        console.error('[STARLING] Error fetching balance breakdown:', e)
+        return null
+    }
 }

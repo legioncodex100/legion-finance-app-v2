@@ -1,5 +1,5 @@
 // Budget utility functions
-import type { EditorCategoryGroup, EditorSubCategory } from '@/lib/actions/budget'
+import type { EditorClass, EditorCategoryGroup, EditorSubCategory } from '@/lib/actions/budget'
 
 // Format currency with UK locale and commas
 export function formatCurrency(amount: number): string {
@@ -82,3 +82,35 @@ export function getGridColsClass(showMonthlyBreakdown: boolean, selectedMonth: n
     }
     return 'grid-cols-[1fr_100px_100px_100px]'
 }
+
+// Grand totals type
+export interface GrandTotals {
+    revenue: { reference: number; budget: number; change: number }
+    expenses: { reference: number; budget: number; change: number }
+    net: { reference: number; budget: number; change: number }
+}
+
+// Calculate grand totals across all classes
+export function calculateGrandTotals(hierarchy: EditorClass[]): GrandTotals {
+    let revenue = { reference: 0, budget: 0, change: 0 }
+    let expenses = { reference: 0, budget: 0, change: 0 }
+
+    for (const cls of hierarchy) {
+        const isRevenue = cls.code === 'REVENUE'
+        const target = isRevenue ? revenue : expenses
+
+        target.reference += cls.totalReference
+        target.budget += cls.totalBudget
+        target.change += cls.totalChange
+    }
+
+    // Net = Revenue - Expenses
+    const net = {
+        reference: revenue.reference - expenses.reference,
+        budget: revenue.budget - expenses.budget,
+        change: revenue.change - expenses.change
+    }
+
+    return { revenue, expenses, net }
+}
+

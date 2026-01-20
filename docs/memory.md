@@ -1,6 +1,6 @@
 # Legion Finance App - Build Memory
 
-> **Last Updated:** January 19, 2026  
+> **Last Updated:** January 20, 2026  
 > **Tech Stack:** Next.js 16 + React 19 + Supabase + Tailwind 4 + Google Gemini AI  
 > **Full History:** [docs/archive/2026-01-full-history.md](archive/2026-01-full-history.md)
 
@@ -164,6 +164,18 @@ Skills are in `.agent/skills/` - I read them automatically.
 ---
 
 ## Recent Session Notes
+
+### January 20, 2026
+- **Budget Tracking Fixes:**
+  - Fixed infinite re-render loop in `BudgetTrackingTab.tsx` (removed `quarterMonths` from useCallback deps)
+  - Corrected variance calculation: Income uses `actual - budget`, Expenses use `budget - actual`
+  - Changed column header from "Remaining" to "Variance"
+- **Budget Grand Totals:**
+  - Added `calculateGrandTotals()` utility function to `budget-utils.ts`
+  - Created `BudgetGrandTotals.tsx` reusable component
+  - Integrated into `CategoryHierarchyTable.tsx` (yearly view)
+  - Integrated into `MonthlyBudgetEditor.tsx` (monthly view)
+  - Grand totals show: Total Revenue, Total Expenses, Net P&L with color coding
 
 ### January 19, 2026
 - **Multi-select transaction linking**: Link multiple transactions to a single bill

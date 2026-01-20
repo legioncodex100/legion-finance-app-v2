@@ -3,7 +3,8 @@
 import { ChevronDown, ChevronRight, Loader2, RefreshCcw, Check, Edit3 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EditorClass } from '@/lib/actions/budget'
-import { formatCurrency } from '../utils'
+import { formatCurrency, calculateGrandTotals } from '../utils'
+import { BudgetGrandTotals } from './BudgetGrandTotals'
 
 interface CategoryHierarchyTableProps {
     editorHierarchy: EditorClass[]
@@ -192,6 +193,12 @@ export function CategoryHierarchyTable({
                                 </div>
                             )
                         })}
+
+                        {/* Grand Totals */}
+                        <BudgetGrandTotals
+                            totals={calculateGrandTotals(editorHierarchy)}
+                            gridColumns="1fr 130px 130px 100px"
+                        />
                     </div>
                 )}
             </div>

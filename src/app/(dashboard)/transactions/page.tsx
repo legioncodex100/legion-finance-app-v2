@@ -8,9 +8,7 @@ import { cn } from "@/lib/utils"
 import {
     Card,
     CardContent,
-    CardDescription,
     CardHeader,
-    CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
@@ -36,7 +34,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { syncStarlingTransactions, getStarlingBalance } from "@/lib/actions/starling"
+import { syncStarlingTransactions, getStarlingBalance, getStarlingBalanceBreakdown, type StarlingBalanceBreakdown } from "@/lib/actions/starling"
 
 export default function TransactionsPage() {
     const [items, setItems] = React.useState<any[]>([])
@@ -109,6 +107,8 @@ export default function TransactionsPage() {
     const [syncFromDate, setSyncFromDate] = React.useState(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0])
     const [syncToDate, setSyncToDate] = React.useState(new Date().toISOString().split('T')[0])
     const [lastSyncDate, setLastSyncDate] = React.useState<string | null>(null)
+    const [potBreakdown, setPotBreakdown] = React.useState<StarlingBalanceBreakdown | null>(null)
+    const [showPotBreakdown, setShowPotBreakdown] = React.useState(false)
 
     // Load bank balance and last sync date from localStorage after mount
     React.useEffect(() => {
@@ -122,6 +122,14 @@ export default function TransactionsPage() {
             // Smart default: start from last sync date
             setSyncFromDate(savedSyncDate)
         }
+
+        // Fetch pot breakdown from Starling
+        getStarlingBalanceBreakdown().then(breakdown => {
+            if (breakdown) {
+                setPotBreakdown(breakdown)
+                setLastBankBalance(breakdown.totalBalance)
+            }
+        }).catch(console.error)
     }, [])
 
     // Persist bank balance to localStorage when it changes
@@ -689,6 +697,50 @@ export default function TransactionsPage() {
                     }}
                 />
             </div>
+
+            {/* Pot Breakdown - only show if we have pots with balance */}
+            {potBreakdown && potBreakdown.pots.length > 0 && (
+                <Card className="shadow-sm border-purple-200/50 dark:border-purple-900/30 bg-gradient-to-r from-purple-500/5 to-indigo-500/5">
+                    <button
+                        onClick={() => setShowPotBreakdown(!showPotBreakdown)}
+                        className="w-full p-4 flex items-center justify-between hover:bg-purple-500/5 transition-colors rounded-t-lg"
+                    >
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-purple-500/10 rounded-lg">
+                                <Banknote className="h-5 w-5 text-purple-500" />
+                            </div>
+                            <div className="text-left">
+                                <h3 className="text-sm font-bold text-purple-600 dark:text-purple-400">
+                                    Starling Pots ({potBreakdown.pots.length})
+                                </h3>
+                                <p className="text-xs text-muted-foreground">
+                                    Total in pots: £{potBreakdown.pots.reduce((sum, p) => sum + p.balance, 0).toFixed(2)}
+                                </p>
+                            </div>
+                        </div>
+                        <ChevronDown className={`h-5 w-5 text-purple-500 transition-transform ${showPotBreakdown ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showPotBreakdown && (
+                        <CardContent className="pt-0 pb-4">
+                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                                {potBreakdown.pots.map((pot) => (
+                                    <div
+                                        key={pot.uid}
+                                        className="p-3 bg-white/50 dark:bg-zinc-900/50 rounded-lg border border-purple-200/50 dark:border-purple-900/30"
+                                    >
+                                        <p className="text-xs font-medium text-muted-foreground truncate" title={pot.name}>
+                                            {pot.name}
+                                        </p>
+                                        <p className="text-lg font-bold text-purple-600 dark:text-purple-400">
+                                            £{pot.balance.toFixed(2)}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </CardContent>
+                    )}
+                </Card>
+            )}
 
             <Card className="shadow-sm border-slate-200 dark:border-zinc-800">
                 <CardHeader className="p-6">

@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { ChevronDown, ChevronRight, Loader2, RefreshCcw } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2, RefreshCcw, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
     getBudgetEditorHierarchy,
     getMonthlyBudgetData,
     getLiveActuals,
+    getCategoryTransactions,
     BudgetScenario,
     EditorClass,
     MonthlyBudgetRow,
@@ -17,6 +18,15 @@ import { formatCurrency, getQuarterMonthNames } from '../utils'
 interface BudgetTrackingTabProps {
     scenario: BudgetScenario
     year: number
+}
+
+interface CategoryTransaction {
+    id: string
+    date: string
+    description: string
+    amount: number
+    counterParty: string | null
+    reference: string | null
 }
 
 export function BudgetTrackingTab({ scenario, year }: BudgetTrackingTabProps) {
@@ -30,6 +40,11 @@ export function BudgetTrackingTab({ scenario, year }: BudgetTrackingTabProps) {
     // Expand/collapse state
     const [expandedClasses, setExpandedClasses] = useState<Set<string>>(new Set())
     const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+
+    // Transaction expansion state
+    const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set())
+    const [categoryTransactions, setCategoryTransactions] = useState<Record<string, CategoryTransaction[]>>({})
+    const [loadingTransactions, setLoadingTransactions] = useState<Set<string>>(new Set())
 
     const quarterMonths = selectedQuarter === 1 ? [1, 2, 3]
         : selectedQuarter === 2 ? [4, 5, 6]
@@ -54,7 +69,9 @@ export function BudgetTrackingTab({ scenario, year }: BudgetTrackingTabProps) {
         setMonthlyData(monthly)
         setLiveActuals(actuals)
         setIsLoading(false)
-    }, [scenario.id, selectedQuarter, quarterMonths, year])
+        // Note: quarterMonths is derived from selectedQuarter, so we don't include it
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scenario.id, selectedQuarter, year])
 
     useEffect(() => { fetchData() }, [fetchData])
 
@@ -90,6 +107,48 @@ export function BudgetTrackingTab({ scenario, year }: BudgetTrackingTabProps) {
             const vals = getGroupTotals(group.subCategories)
             return { budget: acc.budget + vals.budget, actual: acc.actual + vals.actual, remaining: acc.remaining + vals.remaining }
         }, { budget: 0, actual: 0, remaining: 0 })
+    }
+
+    // Toggle transactions for a category
+    const toggleCategoryTransactions = async (categoryId: string) => {
+        const newExpanded = new Set(expandedCategories)
+
+        if (newExpanded.has(categoryId)) {
+            // Collapse
+            newExpanded.delete(categoryId)
+            setExpandedCategories(newExpanded)
+        } else {
+            // Expand and fetch transactions if not cached
+            newExpanded.add(categoryId)
+            setExpandedCategories(newExpanded)
+
+            if (!categoryTransactions[categoryId]) {
+                // Set loading state
+                setLoadingTransactions(prev => new Set(prev).add(categoryId))
+
+                try {
+                    const transactions = await getCategoryTransactions(categoryId, year)
+                    setCategoryTransactions(prev => ({
+                        ...prev,
+                        [categoryId]: transactions
+                    }))
+                } catch (error) {
+                    console.error('Failed to fetch transactions:', error)
+                } finally {
+                    setLoadingTransactions(prev => {
+                        const next = new Set(prev)
+                        next.delete(categoryId)
+                        return next
+                    })
+                }
+            }
+        }
+    }
+
+    // Format date for display
+    const formatDate = (dateStr: string) => {
+        const date = new Date(dateStr)
+        return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
     }
 
     // Grand totals for P&L summary
@@ -192,7 +251,7 @@ export function BudgetTrackingTab({ scenario, year }: BudgetTrackingTabProps) {
                     <div>Category</div>
                     <div className="text-right">Budget</div>
                     <div className="text-right">Actual</div>
-                    <div className="text-right">Remaining</div>
+                    <div className="text-right">Variance</div>
                 </div>
 
                 {isLoading ? (
@@ -223,10 +282,20 @@ export function BudgetTrackingTab({ scenario, year }: BudgetTrackingTabProps) {
                                         </div>
                                         <div className="text-right text-xs tabular-nums font-bold">£{formatCurrency(classTotals.budget)}</div>
                                         <div className="text-right text-xs tabular-nums font-semibold text-blue-600">£{formatCurrency(classTotals.actual)}</div>
-                                        <div className={`text-right text-xs tabular-nums font-bold ${classTotals.remaining >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                            £{formatCurrency(classTotals.remaining)}
-                                            <span className="ml-1 opacity-70">({classTotals.budget > 0 ? Math.round((classTotals.remaining / classTotals.budget) * 100) : 0}%)</span>
-                                        </div>
+                                        {(() => {
+                                            // For income: variance = actual - budget (positive if over-performing)
+                                            // For expenses: variance = budget - actual (positive if under-spending)
+                                            const variance = isIncome
+                                                ? classTotals.actual - classTotals.budget
+                                                : classTotals.budget - classTotals.actual
+                                            const isPositive = variance >= 0
+                                            return (
+                                                <div className={`text-right text-xs tabular-nums font-bold ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                    {isPositive ? '+' : ''}£{formatCurrency(variance)}
+                                                    <span className="ml-1 opacity-70">({classTotals.budget > 0 ? Math.round((variance / classTotals.budget) * 100) : 0}%)</span>
+                                                </div>
+                                            )
+                                        })()}
                                     </button>
 
                                     {/* Groups */}
@@ -252,25 +321,98 @@ export function BudgetTrackingTab({ scenario, year }: BudgetTrackingTabProps) {
                                                     </div>
                                                     <div className="text-right text-xs tabular-nums font-semibold">£{formatCurrency(groupTotals.budget)}</div>
                                                     <div className="text-right text-xs tabular-nums text-blue-600">£{formatCurrency(groupTotals.actual)}</div>
-                                                    <div className={`text-right text-xs tabular-nums font-semibold ${groupTotals.remaining >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                                        £{formatCurrency(groupTotals.remaining)}
-                                                    </div>
+                                                    {(() => {
+                                                        const variance = isIncome
+                                                            ? groupTotals.actual - groupTotals.budget
+                                                            : groupTotals.budget - groupTotals.actual
+                                                        const isPositive = variance >= 0
+                                                        return (
+                                                            <div className={`text-right text-xs tabular-nums font-semibold ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                                {isPositive ? '+' : ''}£{formatCurrency(variance)}
+                                                            </div>
+                                                        )
+                                                    })()}
                                                 </button>
 
                                                 {/* Subcategories */}
                                                 {isGroupExpanded && group.subCategories.map(sub => {
                                                     const vals = getCategoryValues(sub.id)
+                                                    const isSubExpanded = expandedCategories.has(sub.id)
+                                                    const transactions = categoryTransactions[sub.id] || []
+                                                    const isLoadingTx = loadingTransactions.has(sub.id)
+
                                                     return (
-                                                        <div
-                                                            key={sub.id}
-                                                            className="grid grid-cols-[1fr_100px_100px_100px] gap-2 px-4 py-2 pl-14 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800"
-                                                        >
-                                                            <div className="text-sm text-muted-foreground">{sub.name}</div>
-                                                            <div className="text-right text-xs tabular-nums">£{formatCurrency(vals.budget)}</div>
-                                                            <div className="text-right text-xs tabular-nums text-blue-600">£{formatCurrency(vals.actual)}</div>
-                                                            <div className={`text-right text-xs tabular-nums ${vals.remaining >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                                                £{formatCurrency(vals.remaining)}
-                                                            </div>
+                                                        <div key={sub.id}>
+                                                            {/* Category Row */}
+                                                            <button
+                                                                onClick={() => toggleCategoryTransactions(sub.id)}
+                                                                className="w-full grid grid-cols-[1fr_100px_100px_100px] gap-2 px-4 py-2 pl-14 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800 text-left"
+                                                            >
+                                                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                                    {isSubExpanded ? (
+                                                                        <ChevronDown className="h-3 w-3 text-blue-500" />
+                                                                    ) : (
+                                                                        <ChevronRight className="h-3 w-3 text-muted-foreground/50" />
+                                                                    )}
+                                                                    <span>{sub.name}</span>
+                                                                    {vals.actual !== 0 && (
+                                                                        <span className="text-xs text-blue-500 opacity-70">
+                                                                            {isSubExpanded ? '' : '(click to view transactions)'}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                <div className="text-right text-xs tabular-nums">£{formatCurrency(vals.budget)}</div>
+                                                                <div className="text-right text-xs tabular-nums text-blue-600">£{formatCurrency(vals.actual)}</div>
+                                                                {(() => {
+                                                                    const variance = isIncome
+                                                                        ? vals.actual - vals.budget
+                                                                        : vals.budget - vals.actual
+                                                                    const isPositive = variance >= 0
+                                                                    return (
+                                                                        <div className={`text-right text-xs tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                                            {isPositive ? '+' : ''}£{formatCurrency(variance)}
+                                                                        </div>
+                                                                    )
+                                                                })()}
+                                                            </button>
+
+                                                            {/* Transactions List */}
+                                                            {isSubExpanded && (
+                                                                <div className="bg-zinc-50 dark:bg-zinc-800/30 border-t border-zinc-200 dark:border-zinc-700">
+                                                                    {isLoadingTx ? (
+                                                                        <div className="flex items-center justify-center py-4">
+                                                                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                                                                            <span className="ml-2 text-xs text-muted-foreground">Loading transactions...</span>
+                                                                        </div>
+                                                                    ) : transactions.length === 0 ? (
+                                                                        <div className="text-center py-4 text-xs text-muted-foreground">
+                                                                            No transactions for this category in {year}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="max-h-48 overflow-y-auto">
+                                                                            {transactions.map(tx => (
+                                                                                <div
+                                                                                    key={tx.id}
+                                                                                    className="grid grid-cols-[80px_1fr_100px] gap-2 px-4 py-1.5 pl-20 text-xs border-b border-zinc-100 dark:border-zinc-800 last:border-b-0 hover:bg-white dark:hover:bg-zinc-800/50"
+                                                                                >
+                                                                                    <div className="text-muted-foreground">
+                                                                                        {formatDate(tx.date)}
+                                                                                    </div>
+                                                                                    <div className="truncate">
+                                                                                        <span className="text-foreground">{tx.description}</span>
+                                                                                        {tx.counterParty && (
+                                                                                            <span className="text-muted-foreground ml-2">• {tx.counterParty}</span>
+                                                                                        )}
+                                                                                    </div>
+                                                                                    <div className={`text-right tabular-nums font-medium ${tx.amount >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                                                        £{formatCurrency(Math.abs(tx.amount))}
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     )
                                                 })}

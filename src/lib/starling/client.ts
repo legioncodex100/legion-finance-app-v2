@@ -133,11 +133,21 @@ class StarlingClient {
     }
 
     /**
-     * Get all savings goals (pots) for an account
+     * Get all savings goals for an account
      */
     async getSavingsGoals(accountUid: string): Promise<{ savingsGoals: Array<{ savingsGoalUid: string; name: string; totalSaved: { currency: string; minorUnits: number } }> }> {
         return this.request<{ savingsGoals: Array<{ savingsGoalUid: string; name: string; totalSaved: { currency: string; minorUnits: number } }> }>(
             `/api/v2/account/${accountUid}/savings-goals`
+        )
+    }
+
+    /**
+     * Get all Spaces (pots) for an account
+     * Spaces are separate from Savings Goals - they're the "pots" feature
+     */
+    async getSpaces(accountUid: string): Promise<{ spaces: Array<{ spaceUid: string; name: string; balance: { currency: string; minorUnits: number } }> }> {
+        return this.request<{ spaces: Array<{ spaceUid: string; name: string; balance: { currency: string; minorUnits: number } }> }>(
+            `/api/v2/account/${accountUid}/spaces`
         )
     }
 
@@ -164,7 +174,7 @@ class StarlingClient {
     }
 
     /**
-     * Get total balance including all savings goals
+     * Get total balance including all savings goals AND spaces (pots)
      * Returns null if unable to fetch balance
      */
     async getTotalBalance(accountUid: string): Promise<number | null> {
@@ -174,28 +184,54 @@ class StarlingClient {
             let total = balance.effectiveBalance?.minorUnits || 0
             console.log(`[STARLING BALANCE] Main account: £${StarlingClient.toMajorUnits(total).toFixed(2)}`)
 
-            // Get savings goals and add their balances (if scope enabled)
+            // Try to get Spaces (pots) - this is the main "pots" feature in Starling
             try {
-                const response = await this.getSavingsGoals(accountUid) as any
-                console.log(`[STARLING BALANCE] Savings goals response:`, JSON.stringify(response).substring(0, 500))
-                // API returns savingsGoalList, not savingsGoals
-                const savingsGoals = response?.savingsGoalList || response?.savingsGoals || []
-                for (const goal of savingsGoals) {
-                    const goalBalance = goal.totalSaved?.minorUnits || 0
-                    console.log(`[STARLING BALANCE] Pot "${goal.name}": £${StarlingClient.toMajorUnits(goalBalance).toFixed(2)}`)
-                    total += goalBalance
+                console.log(`[STARLING BALANCE] Fetching spaces for account ${accountUid}...`)
+                const spacesResponse = await this.getSpaces(accountUid) as any
+                console.log(`[STARLING BALANCE] Spaces raw response:`, JSON.stringify(spacesResponse))
+
+                const spaces = spacesResponse?.spaces || []
+                console.log(`[STARLING BALANCE] Found ${spaces.length} spaces`)
+
+                for (const space of spaces) {
+                    // Skip the main "default" space as it's included in effectiveBalance
+                    if (space.state === 'DEFAULT') continue
+
+                    const spaceBalance = space.balance?.minorUnits || 0
+                    console.log(`[STARLING BALANCE] Space "${space.name}": £${StarlingClient.toMajorUnits(spaceBalance).toFixed(2)}`)
+                    total += spaceBalance
                 }
-            } catch (e) {
-                console.log('[STARLING] Could not fetch savings goals (scope may not be enabled):', e)
+            } catch (e: any) {
+                console.log('[STARLING BALANCE] Could not fetch spaces:', e?.message || e)
             }
 
-            console.log(`[STARLING BALANCE] Total: £${StarlingClient.toMajorUnits(total).toFixed(2)}`)
+            // Also try savings goals (different from spaces)
+            try {
+                console.log(`[STARLING BALANCE] Fetching savings goals for account ${accountUid}...`)
+                const response = await this.getSavingsGoals(accountUid) as any
+
+                const savingsGoals = response?.savingsGoalList || response?.savingsGoals || []
+                if (savingsGoals.length > 0) {
+                    console.log(`[STARLING BALANCE] Found ${savingsGoals.length} savings goals`)
+                    for (const goal of savingsGoals) {
+                        const goalBalance = goal.totalSaved?.minorUnits || 0
+                        console.log(`[STARLING BALANCE] Savings Goal "${goal.name}": £${StarlingClient.toMajorUnits(goalBalance).toFixed(2)}`)
+                        total += goalBalance
+                    }
+                }
+            } catch (e: any) {
+                console.log('[STARLING BALANCE] Could not fetch savings goals:', e?.message || e)
+            }
+
+            console.log(`[STARLING BALANCE] Total (with pots): £${StarlingClient.toMajorUnits(total).toFixed(2)}`)
             return StarlingClient.toMajorUnits(total)
-        } catch (e) {
-            console.error('[STARLING] Error fetching total balance:', e)
+        } catch (e: any) {
+            console.error('[STARLING BALANCE] Error fetching total balance:', e?.message || e)
             return null
         }
     }
+
+
 
     /**
      * Convert Starling minor units to major units (pence to pounds)

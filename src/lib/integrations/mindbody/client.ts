@@ -1,15 +1,70 @@
 import { MINDBODY_CONFIG, getMindbodyEnv, hasMindbodyStaffCredentials } from './config'
-import type { MindbodyApiResponse, MindbodySale } from './types'
+import type {
+    MindbodyApiResponse,
+    MindbodySale,
+    MindbodyClient as MindbodyClientType,
+    MindbodyContract,
+    MindbodyTransaction,
+    MindbodyClass,
+    MindbodyService,
+    MindbodyActiveMembership,
+    MindbodyApiStats
+} from './types'
+import {
+    MindbodyCache,
+    getCachedToken,
+    setCachedToken,
+    clearTokenCache
+} from './cache'
+
+// ============================================
+// API STATISTICS TRACKING
+// ============================================
+
+let apiStats: MindbodyApiStats = {
+    apiCalls: 0,
+    cacheHits: 0,
+    rateLimitRetries: 0,
+    startTime: Date.now(),
+}
+
+export function getApiStats(): MindbodyApiStats {
+    return { ...apiStats, endTime: Date.now() }
+}
+
+export function resetApiStats(): void {
+    apiStats = {
+        apiCalls: 0,
+        cacheHits: 0,
+        rateLimitRetries: 0,
+        startTime: Date.now(),
+    }
+}
+
+// ============================================
+// TOKEN MANAGEMENT WITH CACHING
+// ============================================
 
 /**
  * Get staff user token for API access
+ * Uses global cache to avoid redundant token requests
  */
 async function getStaffUserToken(): Promise<string> {
+    // Check cache first
+    const cachedToken = getCachedToken()
+    if (cachedToken) {
+        apiStats.cacheHits++
+        return cachedToken
+    }
+
     const env = getMindbodyEnv()
 
     if (!hasMindbodyStaffCredentials()) {
         throw new Error('Staff credentials not configured')
     }
+
+    console.log('[MINDBODY] Fetching new staff token...')
+    apiStats.apiCalls++
 
     const response = await fetch(MINDBODY_CONFIG.userTokenUrl, {
         method: 'POST',
@@ -30,36 +85,82 @@ async function getStaffUserToken(): Promise<string> {
     }
 
     const data = await response.json()
-    return data.AccessToken
+    const token = data.AccessToken
+
+    // Cache the token (7 days default TTL)
+    setCachedToken(token)
+    console.log('[MINDBODY] Token cached successfully')
+
+    return token
 }
 
 /**
+ * Clear the cached token (useful for testing or forced refresh)
+ */
+export function invalidateToken(): void {
+    clearTokenCache()
+}
+
+// ============================================
+// RATE LIMIT CONFIGURATION
+// ============================================
+
+const RATE_LIMIT_CONFIG = {
+    maxRetries: 3,
+    initialDelayMs: 1000,  // 1 second
+    maxDelayMs: 60000,     // 60 seconds
+    backoffMultiplier: 2,
+}
+
+/**
+ * Calculate delay with exponential backoff
+ */
+function calculateBackoffDelay(attempt: number): number {
+    const delay = RATE_LIMIT_CONFIG.initialDelayMs * Math.pow(RATE_LIMIT_CONFIG.backoffMultiplier, attempt)
+    return Math.min(delay, RATE_LIMIT_CONFIG.maxDelayMs)
+}
+
+/**
+ * Sleep for a specified duration
+ */
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ============================================
+// MINDBODY API CLIENT
+// ============================================
+
+/**
  * Mindbody API Client
- * Uses API Key + Staff Token authentication
+ * Features:
+ * - Global token caching (7-day TTL)
+ * - Rate limit handling with exponential backoff
+ * - Response caching for frequently accessed data
+ * - API statistics tracking
  */
 export class MindbodyClient {
     private apiKey: string
     private siteId: string
-    private staffToken: string | null = null
+    private cache: MindbodyCache
 
     constructor(apiKey?: string, siteId?: string) {
         const env = getMindbodyEnv()
         this.apiKey = apiKey || env.apiKey
         this.siteId = siteId || env.siteId
+        this.cache = new MindbodyCache()
     }
 
     /**
-     * Ensure we have a valid staff token
+     * Ensure we have a valid staff token (uses global cache)
      */
     private async ensureToken(): Promise<string> {
-        if (!this.staffToken) {
-            this.staffToken = await getStaffUserToken()
-        }
-        return this.staffToken
+        return getStaffUserToken()
     }
 
     /**
      * Make authenticated request to Mindbody API
+     * Includes rate limit handling with exponential backoff
      */
     private async request<T>(
         endpoint: string,
@@ -68,23 +169,81 @@ export class MindbodyClient {
         const token = await this.ensureToken()
         const url = `${MINDBODY_CONFIG.apiBaseUrl}${endpoint}`
 
-        const response = await fetch(url, {
-            ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                'Api-Key': this.apiKey,
-                'SiteId': this.siteId,
-                'Authorization': token,
-                ...options.headers,
-            },
-        })
+        let lastError: Error | null = null
 
-        if (!response.ok) {
-            const errorText = await response.text()
-            throw new Error(`Mindbody API error (${response.status}): ${errorText}`)
+        for (let attempt = 0; attempt < RATE_LIMIT_CONFIG.maxRetries; attempt++) {
+            apiStats.apiCalls++
+
+            const response = await fetch(url, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Api-Key': this.apiKey,
+                    'SiteId': this.siteId,
+                    'Authorization': token,
+                    ...options.headers,
+                },
+            })
+
+            // Handle rate limiting (429)
+            if (response.status === 429) {
+                apiStats.rateLimitRetries++
+                const retryAfter = parseInt(response.headers.get('Retry-After') || '60', 10)
+                const delay = calculateBackoffDelay(attempt)
+                const waitTime = Math.max(retryAfter * 1000, delay)
+
+                console.warn(`[MINDBODY] Rate limited. Waiting ${waitTime}ms before retry ${attempt + 1}/${RATE_LIMIT_CONFIG.maxRetries}`)
+                await sleep(waitTime)
+                continue
+            }
+
+            // Handle token expiration (401) - refresh token and retry once
+            if (response.status === 401 && attempt === 0) {
+                console.warn('[MINDBODY] Token expired, refreshing...')
+                clearTokenCache()
+                const newToken = await this.ensureToken()
+                // Retry with new token
+                const retryResponse = await fetch(url, {
+                    ...options,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Api-Key': this.apiKey,
+                        'SiteId': this.siteId,
+                        'Authorization': newToken,
+                        ...options.headers,
+                    },
+                })
+
+                if (retryResponse.ok) {
+                    return retryResponse.json()
+                }
+            }
+
+            // Handle other errors
+            if (!response.ok) {
+                const errorText = await response.text()
+                lastError = new Error(`Mindbody API error (${response.status}): ${errorText}`)
+
+                // Don't retry on client errors (4xx except 429)
+                if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+                    throw lastError
+                }
+
+                // Retry on server errors (5xx)
+                if (response.status >= 500) {
+                    const delay = calculateBackoffDelay(attempt)
+                    console.warn(`[MINDBODY] Server error (${response.status}). Waiting ${delay}ms before retry`)
+                    await sleep(delay)
+                    continue
+                }
+
+                throw lastError
+            }
+
+            return response.json()
         }
 
-        return response.json()
+        throw lastError || new Error('Max retries exceeded')
     }
 
     /**
@@ -156,7 +315,7 @@ export class MindbodyClient {
      * Get contracts/memberships (allows filtering by LocationId)
      * This is the preferred method for getting all memberships
      */
-    async getContracts(locationId?: number, limit: number = 200, offset: number = 0): Promise<any> {
+    async getContracts(locationId?: number, limit: number = 200, offset: number = 0): Promise<MindbodyApiResponse<MindbodyContract>> {
         const params = new URLSearchParams({
             Limit: limit.toString(),
             Offset: offset.toString(),
@@ -166,14 +325,23 @@ export class MindbodyClient {
             params.set('LocationId', locationId.toString())
         }
 
-        return this.request<any>(`/sale/contracts?${params.toString()}`)
+        return this.request<MindbodyApiResponse<MindbodyContract>>(`/sale/contracts?${params.toString()}`)
     }
 
     /**
      * Get all contracts/memberships with pagination
      */
-    async getAllContracts(locationId?: number): Promise<any[]> {
-        const allContracts: any[] = []
+    async getAllContracts(locationId?: number): Promise<MindbodyContract[]> {
+        // Check cache first (only for non-filtered requests)
+        if (!locationId) {
+            const cached = this.cache.getContracts<MindbodyContract[]>()
+            if (cached) {
+                apiStats.cacheHits++
+                return cached
+            }
+        }
+
+        const allContracts: MindbodyContract[] = []
         let offset = 0
         const limit = 200
 
@@ -186,6 +354,11 @@ export class MindbodyClient {
             offset += limit
         }
 
+        // Cache if not filtered
+        if (!locationId) {
+            this.cache.setContracts(allContracts)
+        }
+
         return allContracts
     }
 
@@ -194,7 +367,7 @@ export class MindbodyClient {
      * Use empty SearchText to get all clients
      * includeInactive: true to include cancelled/inactive members
      */
-    async searchClients(searchText: string = '', limit: number = 200, offset: number = 0, includeInactive: boolean = true): Promise<any> {
+    async searchClients(searchText: string = '', limit: number = 200, offset: number = 0, includeInactive: boolean = true): Promise<MindbodyApiResponse<MindbodyClientType>> {
         const params = new URLSearchParams()
         params.set('request.limit', limit.toString())
         params.set('request.offset', offset.toString())
@@ -204,14 +377,21 @@ export class MindbodyClient {
             params.set('request.searchText', searchText)
         }
 
-        return this.request<any>(`/client/clients?${params.toString()}`)
+        return this.request<MindbodyApiResponse<MindbodyClientType>>(`/client/clients?${params.toString()}`)
     }
 
     /**
      * Get all clients with pagination
      */
-    async getAllClients(): Promise<any[]> {
-        const allClients: any[] = []
+    async getAllClients(): Promise<MindbodyClientType[]> {
+        // Check cache first
+        const cached = this.cache.getClients<MindbodyClientType[]>()
+        if (cached) {
+            apiStats.cacheHits++
+            return cached
+        }
+
+        const allClients: MindbodyClientType[] = []
         let offset = 0
         const limit = 200
 
@@ -224,6 +404,9 @@ export class MindbodyClient {
             offset += limit
         }
 
+        // Cache the results
+        this.cache.setClients(allClients)
+
         return allClients
     }
 
@@ -231,11 +414,11 @@ export class MindbodyClient {
     /**
      * Get client details (batched, max 20 per request)
      */
-    async getClients(clientIds: string[]): Promise<any> {
+    async getClients(clientIds: string[]): Promise<MindbodyApiResponse<MindbodyClientType>> {
         const params = new URLSearchParams()
         params.set('request.clientIds', clientIds.slice(0, 20).join(','))
 
-        return this.request<any>(`/client/clients?${params.toString()}`)
+        return this.request<MindbodyApiResponse<MindbodyClientType>>(`/client/clients?${params.toString()}`)
     }
 
     /**
@@ -269,14 +452,14 @@ export class MindbodyClient {
     /**
      * Get classes for a date range
      */
-    async getClasses(startDate: Date, endDate: Date, limit: number = 200): Promise<any> {
+    async getClasses(startDate: Date, endDate: Date, limit: number = 200): Promise<MindbodyApiResponse<MindbodyClass>> {
         const params = new URLSearchParams({
             StartDateTime: startDate.toISOString(),
             EndDateTime: endDate.toISOString(),
             Limit: limit.toString(),
         })
 
-        return this.request<any>(`/class/classes?${params.toString()}`)
+        return this.request<MindbodyApiResponse<MindbodyClass>>(`/class/classes?${params.toString()}`)
     }
 
     /**
@@ -423,7 +606,7 @@ export class MindbodyClient {
     /**
      * Get services/pricing catalog
      */
-    async getServices(locationId?: number): Promise<any> {
+    async getServices(locationId?: number): Promise<MindbodyApiResponse<MindbodyService>> {
         const params = new URLSearchParams()
 
         if (locationId) {
@@ -431,15 +614,31 @@ export class MindbodyClient {
         }
 
         const queryString = params.toString()
-        return this.request<any>(`/sale/services${queryString ? '?' + queryString : ''}`)
+        return this.request<MindbodyApiResponse<MindbodyService>>(`/sale/services${queryString ? '?' + queryString : ''}`)
     }
 
     /**
-     * Get all services with pricing
+     * Get all services with pricing (cached for 1 hour)
      */
-    async getAllServices(locationId?: number): Promise<any[]> {
+    async getAllServices(locationId?: number): Promise<MindbodyService[]> {
+        // Check cache first (only for non-filtered requests)
+        if (!locationId) {
+            const cached = this.cache.getServices<MindbodyService[]>()
+            if (cached) {
+                apiStats.cacheHits++
+                return cached
+            }
+        }
+
         const response = await this.getServices(locationId)
-        return response.Services || []
+        const services = response.Services || []
+
+        // Cache if not filtered
+        if (!locationId) {
+            this.cache.setServices(services)
+        }
+
+        return services
     }
 
     // ============================================
@@ -450,21 +649,21 @@ export class MindbodyClient {
      * Get sale transactions - includes SettlementId, EntryMethod, PaymentType
      * Critical for fee calculation and bank reconciliation
      */
-    async getTransactions(startDate: Date, endDate: Date, limit: number = 200, offset: number = 0): Promise<any> {
+    async getTransactions(startDate: Date, endDate: Date, limit: number = 200, offset: number = 0): Promise<MindbodyApiResponse<MindbodyTransaction>> {
         const params = new URLSearchParams()
         params.set('request.transactionStartDateTime', startDate.toISOString())
         params.set('request.transactionEndDateTime', endDate.toISOString())
         params.set('request.limit', limit.toString())
         params.set('request.offset', offset.toString())
 
-        return this.request<any>(`/sale/transactions?${params.toString()}`)
+        return this.request<MindbodyApiResponse<MindbodyTransaction>>(`/sale/transactions?${params.toString()}`)
     }
 
     /**
      * Get all transactions with pagination
      */
-    async getAllTransactions(startDate: Date, endDate: Date): Promise<any[]> {
-        const allTransactions: any[] = []
+    async getAllTransactions(startDate: Date, endDate: Date): Promise<MindbodyTransaction[]> {
+        const allTransactions: MindbodyTransaction[] = []
         let offset = 0
         const limit = 200
 
@@ -484,7 +683,7 @@ export class MindbodyClient {
      * Get active client memberships - Active/Suspended/Terminated status
      * Better than using Status field from clients
      */
-    async getActiveClientMemberships(clientId?: string, limit: number = 200, offset: number = 0): Promise<any> {
+    async getActiveClientMemberships(clientId?: string, limit: number = 200, offset: number = 0): Promise<MindbodyApiResponse<MindbodyActiveMembership>> {
         const params = new URLSearchParams({
             Limit: limit.toString(),
             Offset: offset.toString(),
@@ -494,14 +693,14 @@ export class MindbodyClient {
             params.set('ClientId', clientId)
         }
 
-        return this.request<any>(`/client/activeclientmemberships?${params.toString()}`)
+        return this.request<MindbodyApiResponse<MindbodyActiveMembership>>(`/client/activeclientmemberships?${params.toString()}`)
     }
 
     /**
      * Get all active memberships with pagination
      */
-    async getAllActiveClientMemberships(): Promise<any[]> {
-        const allMemberships: any[] = []
+    async getAllActiveClientMemberships(): Promise<MindbodyActiveMembership[]> {
+        const allMemberships: MindbodyActiveMembership[] = []
         let offset = 0
         const limit = 200
 

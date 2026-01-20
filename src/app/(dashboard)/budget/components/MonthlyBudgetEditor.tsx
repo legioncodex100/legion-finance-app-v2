@@ -462,6 +462,67 @@ export function MonthlyBudgetEditor({ scenarioId, year, yearlyConfirmed }: Month
                                 </div>
                             )
                         })}
+
+                        {/* Grand Totals */}
+                        {(() => {
+                            const revenue = editorHierarchy.find(c => c.code === 'REVENUE')
+                            const expenseClasses = editorHierarchy.filter(c => c.code !== 'REVENUE')
+
+                            if (selectedMonth === null) {
+                                const revTotals = revenue ? getClassTotals(revenue.categoryGroups) : { m1Budget: 0, m2Budget: 0, m3Budget: 0, qTotal: 0 }
+                                const expTotals = expenseClasses.reduce((acc, cls) => {
+                                    const t = getClassTotals(cls.categoryGroups)
+                                    return { m1Budget: acc.m1Budget + t.m1Budget, m2Budget: acc.m2Budget + t.m2Budget, m3Budget: acc.m3Budget + t.m3Budget, qTotal: acc.qTotal + t.qTotal }
+                                }, { m1Budget: 0, m2Budget: 0, m3Budget: 0, qTotal: 0 })
+
+                                const rows = [
+                                    { label: 'Total Revenue', ...revTotals },
+                                    { label: 'Total Expenses', ...expTotals },
+                                    { label: 'Net P&L', m1Budget: revTotals.m1Budget - expTotals.m1Budget, m2Budget: revTotals.m2Budget - expTotals.m2Budget, m3Budget: revTotals.m3Budget - expTotals.m3Budget, qTotal: revTotals.qTotal - expTotals.qTotal, isNet: true }
+                                ]
+
+                                return (
+                                    <div className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-100 dark:bg-zinc-800/50 min-w-[600px]">
+                                        {rows.map(({ label, m1Budget, m2Budget, m3Budget, qTotal, isNet }) => (
+                                            <div key={label} className={`grid gap-2 px-4 py-2 text-sm font-semibold ${isNet ? 'bg-zinc-200 dark:bg-zinc-700/50' : ''}`} style={{ gridTemplateColumns: '1fr 80px 80px 80px 100px' }}>
+                                                <div className="sticky left-0 z-10 bg-inherit">{label}</div>
+                                                <div className="text-right tabular-nums">£{formatCurrency(m1Budget)}</div>
+                                                <div className="text-right tabular-nums">£{formatCurrency(m2Budget)}</div>
+                                                <div className="text-right tabular-nums">£{formatCurrency(m3Budget)}</div>
+                                                <div className={`text-right tabular-nums font-bold ${isNet ? (qTotal >= 0 ? 'text-emerald-600' : 'text-red-600') : ''}`}>{isNet && qTotal >= 0 ? '+' : ''}£{formatCurrency(qTotal)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )
+                            } else {
+                                const revTotals = revenue ? getClassMonthTotals(revenue.categoryGroups, selectedMonth) : { budget: 0, actual: 0, variance: 0 }
+                                const expTotals = expenseClasses.reduce((acc, cls) => {
+                                    const t = getClassMonthTotals(cls.categoryGroups, selectedMonth)
+                                    return { budget: acc.budget + t.budget, actual: acc.actual + t.actual, variance: acc.variance + t.variance }
+                                }, { budget: 0, actual: 0, variance: 0 })
+                                const netBudget = revTotals.budget - expTotals.budget
+                                const netActual = revTotals.actual - expTotals.actual
+
+                                const rows = [
+                                    { label: 'Total Revenue', budget: revTotals.budget, actual: revTotals.actual, variance: revTotals.actual - revTotals.budget },
+                                    { label: 'Total Expenses', budget: expTotals.budget, actual: expTotals.actual, variance: expTotals.budget - expTotals.actual },
+                                    { label: 'Net P&L', budget: netBudget, actual: netActual, variance: netActual - netBudget, isNet: true }
+                                ]
+
+                                return (
+                                    <div className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-100 dark:bg-zinc-800/50 min-w-[600px]">
+                                        {rows.map(({ label, budget, actual, variance, isNet }) => (
+                                            <div key={label} className={`grid gap-2 px-4 py-2 text-sm font-semibold ${isNet ? 'bg-zinc-200 dark:bg-zinc-700/50' : ''}`} style={{ gridTemplateColumns: '1fr 100px 100px 100px' }}>
+                                                <div className="sticky left-0 z-10 bg-inherit">{label}</div>
+                                                <div className="text-right tabular-nums">£{formatCurrency(budget)}</div>
+                                                <div className="text-right tabular-nums text-blue-600">£{formatCurrency(actual)}</div>
+                                                <div className={`text-right tabular-nums pr-4 ${variance >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{variance >= 0 ? '+' : ''}£{formatCurrency(variance)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )
+                            }
+                        })()}
                     </div>
                 )}
             </div>

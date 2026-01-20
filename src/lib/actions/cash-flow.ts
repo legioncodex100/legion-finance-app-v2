@@ -185,13 +185,29 @@ export async function analyzeHistoricalPatterns(): Promise<{ success: boolean; p
     return { success: true, patternsCreated }
 }
 
-// Get current bank balance (opening balance + sum of all transactions)
+// Get current bank balance - uses live Starling balance (with pots) if available
 export async function getCurrentBankBalance(): Promise<number> {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    // Get user's opening balance
+    // Try to get live Starling balance first (includes pots)
+    try {
+        const { getStarlingBalanceBreakdown } = await import('@/lib/actions/starling')
+        const breakdown = await getStarlingBalanceBreakdown()
+        if (breakdown && breakdown.totalBalance > 0) {
+            console.log('[CashFlow] getCurrentBankBalance (Starling):', {
+                mainAccount: breakdown.mainAccountBalance,
+                pots: breakdown.pots.length,
+                total: breakdown.totalBalance
+            })
+            return breakdown.totalBalance
+        }
+    } catch (e) {
+        console.log('[CashFlow] Starling balance unavailable, falling back to calculated')
+    }
+
+    // Fallback: calculated balance (opening balance + transaction sum)
     const { data: settings } = await supabase
         .from('user_settings')
         .select('opening_balance')
@@ -226,13 +242,13 @@ export async function getCurrentBankBalance(): Promise<number> {
 
         const txSum = allTransactions.reduce((sum, tx) => sum + Number(tx.amount), 0)
         const balance = openingBalance + txSum
-        console.log('[CashFlow] getCurrentBankBalance (paginated):', { openingBalance, txSum, balance: balance.toFixed(2) })
+        console.log('[CashFlow] getCurrentBankBalance (paginated fallback):', { openingBalance, txSum, balance: balance.toFixed(2) })
         return balance
     }
 
     const txSum = Number((data as { balance?: number })?.balance) || 0
     const balance = openingBalance + txSum
-    console.log('[CashFlow] getCurrentBankBalance (RPC):', { openingBalance, txSum, balance: balance.toFixed(2) })
+    console.log('[CashFlow] getCurrentBankBalance (RPC fallback):', { openingBalance, txSum, balance: balance.toFixed(2) })
     return balance
 }
 
@@ -319,6 +335,8 @@ export async function generateForecast(weeks: number): Promise<ForecastWeek[]> {
         .eq('user_id', user.id)
         .eq('is_paid', false)
         .in('bill_status', ['approved', 'scheduled', 'overdue'])
+
+    console.log('[CashFlow Forecast] Unpaid payables count:', payables?.length || 0)
 
     // Get staff with weekly salary for payroll (keep for recurring weekly salaries)
     const { data: staff } = await supabase
@@ -409,7 +427,25 @@ export async function generateForecast(weeks: number): Promise<ForecastWeek[]> {
         })
 
         // 5. Add staff weekly salaries (every week)
+        // But skip staff who already have a payable in this week's outflows (avoid double-counting)
+        const payableStaffIds = new Set(
+            payables
+                ?.filter(p => {
+                    if (!p.next_due || !p.staff_id) return false
+                    const dueDate = new Date(p.next_due)
+                    const isOverdue = dueDate < today
+                    // Same logic as payables above
+                    return (dueDate >= weekStart && dueDate <= weekEnd) || (isOverdue && w === 0)
+                })
+                .map(p => p.staff_id) || []
+        )
+
         staff?.forEach(s => {
+            // Skip if this staff has a payable due this week (already counted above)
+            if (payableStaffIds.has(s.id)) {
+                console.log(`[CashFlow Forecast] Skipping staff salary for ${s.name} - already has payable this week`)
+                return
+            }
             if (s.weekly_salary && Number(s.weekly_salary) > 0) {
                 const label = s.is_owner ? `Owner: ${s.name}` : `Staff: ${s.name}`
                 expectedOutflows += Number(s.weekly_salary)
@@ -457,6 +493,7 @@ export interface HistoricalWeek {
 }
 
 // Generate historical weeks with actual transaction data
+// Anchors to current Starling balance for accuracy
 export async function generateHistoricalWeeks(weeksBack: number): Promise<HistoricalWeek[]> {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -483,36 +520,47 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
 
     const currentWeekStartStr = formatDateLocal(currentWeekStart)
 
-    // Get opening balance setting
-    const { data: settings } = await supabase
-        .from('user_settings')
-        .select('opening_balance')
-        .eq('user_id', user.id)
-        .single()
-    const openingBalance = Number(settings?.opening_balance) || 0
+    // Get the current balance (now uses Starling if available)
+    const currentBalance = await getCurrentBankBalance()
+    console.log('[HistoricalWeeks] Current balance (anchor):', currentBalance)
 
-    // Fetch ALL transactions up to the start of current week
-    // Need all transactions (not just historical window) for running balance calculation
+    // Fetch ALL transactions from the historical window up to today
+    // We need transactions FROM the oldest historical week TO today
+    const oldestWeekStart = new Date(currentWeekStart)
+    oldestWeekStart.setDate(currentWeekStart.getDate() - (weeksBack * 7))
+    const oldestWeekStartStr = formatDateLocal(oldestWeekStart)
+    const todayStr = formatDateLocal(today)
+
     const { data: allTransactions, error } = await supabase
         .from('transactions')
         .select('id, transaction_date, amount, raw_party, description, type')
         .eq('user_id', user.id)
-        .lt('transaction_date', currentWeekStartStr)
-        .order('transaction_date', { ascending: false }) // Most recent first for debugging
+        .gte('transaction_date', oldestWeekStartStr)
+        .lte('transaction_date', todayStr)
+        .order('transaction_date', { ascending: true })
         .limit(10000)
 
     console.log('[HistoricalWeeks] Query:', {
-        currentWeekStartStr,
+        range: `${oldestWeekStartStr} to ${todayStr}`,
         weeksBack,
         txCount: allTransactions?.length || 0,
-        error: error?.message,
-        firstTx: allTransactions?.[0]?.transaction_date,
-        lastTx: allTransactions?.[allTransactions?.length - 1]?.transaction_date
+        error: error?.message
     })
+
+    // Calculate net cash flow for the current (partial) week
+    // This is transactions from currentWeekStart to today
+    const currentWeekTransactions = allTransactions?.filter(tx =>
+        tx.transaction_date >= currentWeekStartStr && tx.transaction_date <= todayStr
+    ) || []
+    const currentWeekNet = currentWeekTransactions.reduce((sum, tx) => sum + Number(tx.amount), 0)
+
+    // The balance at the END of the previous week (W-1) = currentBalance - currentWeekNet
+    let runningBalanceAtWeekEnd = currentBalance - currentWeekNet
 
     const historical: HistoricalWeek[] = []
 
-    for (let w = weeksBack; w >= 1; w--) {
+    // Build weeks from most recent (W-1) to oldest (W-N) so we can work backwards
+    for (let w = 1; w <= weeksBack; w++) {
         const weekStart = new Date(currentWeekStart)
         weekStart.setDate(currentWeekStart.getDate() - (w * 7))
 
@@ -522,15 +570,10 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
         const weekStartStr = formatDateLocal(weekStart)
         const weekEndStr = formatDateLocal(weekEnd)
 
-        // Transactions for THIS week only (for inflows/outflows display)
-        const weekTransactions = allTransactions?.filter(tx => {
-            return tx.transaction_date >= weekStartStr && tx.transaction_date <= weekEndStr
-        }) || []
-
-        // ALL transactions up to and including the end of this week (for balance)
-        const transactionsUpToWeekEnd = allTransactions?.filter(tx => {
-            return tx.transaction_date <= weekEndStr
-        }) || []
+        // Transactions for THIS week only
+        const weekTransactions = allTransactions?.filter(tx =>
+            tx.transaction_date >= weekStartStr && tx.transaction_date <= weekEndStr
+        ) || []
 
         const incomeSources: { source: string; amount: number }[] = []
         const expenseSources: { source: string; amount: number }[] = []
@@ -560,23 +603,33 @@ export async function generateHistoricalWeeks(weeksBack: number): Promise<Histor
             }
         })
 
-        // Calculate balance at end of this week = opening balance + sum of all transactions up to this week
-        const balanceAtWeekEnd = openingBalance + transactionsUpToWeekEnd.reduce((sum, tx) => sum + Number(tx.amount), 0)
+        const netCashFlow = actualInflows - actualOutflows
 
-        historical.push({
+        // For W-1 (most recent), runningBalanceAtWeekEnd is already set
+        // For older weeks, we subtract this week's net to get the balance at end of this week
+        if (w > 1) {
+            runningBalanceAtWeekEnd -= netCashFlow
+        }
+
+        historical.unshift({
             weekNumber: -w,
             weekStart,
             weekEnd,
             actualInflows,
             actualOutflows,
-            netCashFlow: actualInflows - actualOutflows,
-            runningBalance: balanceAtWeekEnd,
+            netCashFlow,
+            runningBalance: runningBalanceAtWeekEnd,
             isActual: true,
             sources: {
                 income: incomeSources.slice(0, 5),
                 expenses: expenseSources.slice(0, 5)
             }
         })
+
+        // After processing W-1, subtract its net to get W-2's ending balance, etc.
+        if (w === 1) {
+            runningBalanceAtWeekEnd -= netCashFlow
+        }
     }
 
     return historical

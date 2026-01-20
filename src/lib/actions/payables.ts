@@ -309,10 +309,10 @@ export async function linkPayableToTransaction(payableId: string, transactionId:
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    // Fetch payable to get total amount
+    // Fetch payable to get total amount and check if variable
     const { data: payable } = await supabase
         .from('payables')
-        .select('amount, amount_paid')
+        .select('amount, amount_paid, is_variable_amount')
         .eq('id', payableId)
         .single()
 
@@ -354,19 +354,34 @@ export async function linkPayableToTransaction(payableId: string, transactionId:
         .eq('payable_id', payableId)
 
     const totalPaid = (allLinks || []).reduce((sum, link) => sum + Number(link.amount), 0)
-    const totalAmount = Number(payable.amount)
+
+    // For variable bills, update the amount to match what was actually paid
+    // This is the key feature: variable bills get their actual amount from linked transactions
+    let totalAmount = Number(payable.amount)
+    if (payable.is_variable_amount) {
+        totalAmount = totalPaid
+        console.log(`[Variable Bill] Updating amount from estimated £${payable.amount} to actual £${totalPaid}`)
+    }
+
     const isFullyPaid = totalPaid >= totalAmount
 
-    // Update payable with new totals
+    // Update payable with new totals (and amount if variable)
+    const updateData: Record<string, unknown> = {
+        amount_paid: totalPaid,
+        bill_status: isFullyPaid ? 'paid' : 'scheduled',
+        is_paid: isFullyPaid,
+        reconciled_at: isFullyPaid ? new Date().toISOString() : null,
+        last_paid_date: paidDate
+    }
+
+    // Update the bill amount for variable bills
+    if (payable.is_variable_amount) {
+        updateData.amount = totalPaid
+    }
+
     const { error: payableError } = await supabase
         .from('payables')
-        .update({
-            amount_paid: totalPaid,
-            bill_status: isFullyPaid ? 'paid' : 'scheduled',
-            is_paid: isFullyPaid,
-            reconciled_at: isFullyPaid ? new Date().toISOString() : null,
-            last_paid_date: paidDate
-        })
+        .update(updateData)
         .eq('id', payableId)
         .eq('user_id', user.id)
 
@@ -600,31 +615,68 @@ export async function getPayablesSummary() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    const today = new Date().toISOString().split('T')[0]
+    const now = new Date()
+    const today = now.toISOString().split('T')[0]
     const weekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+
+    // Calculate month boundaries
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0]
 
     // Get all unpaid payables
     const { data: payables } = await supabase
         .from('payables')
-        .select('amount, payee_type, next_due, bill_status, is_system_generated')
+        .select('amount, amount_paid, payee_type, next_due, bill_status, is_system_generated')
         .eq('user_id', user.id)
         .neq('bill_status', 'paid')
         .neq('bill_status', 'voided')
 
-    if (!payables) return { totalPayables: 0, dueWithin7Days: 0, merchantFees: 0, staffLiability: 0 }
+    if (!payables) return {
+        totalPayables: 0,
+        dueWithin7Days: 0,
+        merchantFees: 0,
+        staffLiability: 0,
+        dueThisMonth: 0,
+        overdueAmount: 0
+    }
 
-    const totalPayables = payables.reduce((sum, p) => sum + Number(p.amount), 0)
+    // Calculate remaining amount for each bill (amount - amount_paid)
+    const getRemainingAmount = (p: { amount: number | string, amount_paid?: number | string | null }) => {
+        return Number(p.amount) - Number(p.amount_paid || 0)
+    }
+
+    const totalPayables = payables.reduce((sum, p) => sum + getRemainingAmount(p), 0)
+
     const dueWithin7Days = payables
         .filter(p => p.next_due <= weekFromNow)
-        .reduce((sum, p) => sum + Number(p.amount), 0)
+        .reduce((sum, p) => sum + getRemainingAmount(p), 0)
+
     const merchantFees = payables
         .filter(p => p.payee_type === 'system' && p.is_system_generated)
-        .reduce((sum, p) => sum + Number(p.amount), 0)
+        .reduce((sum, p) => sum + getRemainingAmount(p), 0)
+
     const staffLiability = payables
         .filter(p => p.payee_type === 'staff')
-        .reduce((sum, p) => sum + Number(p.amount), 0)
+        .reduce((sum, p) => sum + getRemainingAmount(p), 0)
 
-    return { totalPayables, dueWithin7Days, merchantFees, staffLiability }
+    // NEW: Total due this month (including overdue from previous months)
+    const dueThisMonth = payables
+        .filter(p => p.next_due <= monthEnd && p.next_due >= monthStart)
+        .reduce((sum, p) => sum + getRemainingAmount(p), 0)
+
+    // NEW: Overdue amount (bills past due date)
+    const overdueAmount = payables
+        .filter(p => p.next_due < today)
+        .reduce((sum, p) => sum + getRemainingAmount(p), 0)
+
+    return {
+        totalPayables,
+        dueWithin7Days,
+        merchantFees,
+        staffLiability,
+        dueThisMonth,
+        overdueAmount
+    }
 }
 
 // ============= Auto-Bill Generation =============
@@ -1199,4 +1251,47 @@ function getNextFriday(): Date {
     const friday = new Date(today)
     friday.setDate(today.getDate() + daysUntilFriday)
     return friday
+}
+
+/**
+ * Fix all payables that are fully paid but have incorrect status
+ * This corrects stale data from old linking bugs
+ */
+export async function fixStalePayableStatuses() {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("Unauthorized")
+
+    // Find all payables where amount_paid >= amount but is_paid is false or bill_status is not 'paid'
+    const { data: stalePayables } = await supabase
+        .from('payables')
+        .select('id, name, amount, amount_paid, is_paid, bill_status')
+        .eq('user_id', user.id)
+        .neq('bill_status', 'paid')
+
+    if (!stalePayables || stalePayables.length === 0) {
+        return { fixed: 0, checked: 0 }
+    }
+
+    let fixed = 0
+    for (const p of stalePayables) {
+        const amountPaid = Number(p.amount_paid || 0)
+        const amount = Number(p.amount || 0)
+
+        // If fully paid but status is wrong, fix it
+        if (amountPaid >= amount && amountPaid > 0) {
+            console.log(`[Fix] Correcting status for "${p.name}": paid £${amountPaid} of £${amount}`)
+            await supabase
+                .from('payables')
+                .update({
+                    bill_status: 'paid',
+                    is_paid: true
+                })
+                .eq('id', p.id)
+                .eq('user_id', user.id)
+            fixed++
+        }
+    }
+
+    return { fixed, checked: stalePayables.length }
 }

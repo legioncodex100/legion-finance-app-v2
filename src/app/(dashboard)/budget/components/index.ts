@@ -6,3 +6,5 @@ export { QuarterLockGrid } from './QuarterLockGrid'
 export { ScenarioNotesEditor } from './ScenarioNotesEditor'
 export { CategoryHierarchyTable } from './CategoryHierarchyTable'
 export { MonthlyBudgetEditor } from './MonthlyBudgetEditor'
+export { BudgetGrandTotals } from './BudgetGrandTotals'
+

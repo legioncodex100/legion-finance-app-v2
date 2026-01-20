@@ -31,6 +31,7 @@ import {
     createTemplate,
     toggleTemplateActive,
     endTemplate,
+    fixStalePayableStatuses,
     type Payable,
     type PayeeType,
     type BillStatus,
@@ -68,7 +69,14 @@ export default function AccountsPayablePage() {
     const [isGeneratingBills, setIsGeneratingBills] = React.useState(false)
 
     // Summary
-    const [summary, setSummary] = React.useState({ totalPayables: 0, dueWithin7Days: 0, merchantFees: 0, staffLiability: 0 })
+    const [summary, setSummary] = React.useState({
+        totalPayables: 0,
+        dueWithin7Days: 0,
+        merchantFees: 0,
+        staffLiability: 0,
+        dueThisMonth: 0,
+        overdueAmount: 0
+    })
 
     // Form state
     const [name, setName] = React.useState("")
@@ -379,6 +387,7 @@ export default function AccountsPayablePage() {
 
     // Filter
     const today = new Date()
+    today.setHours(0, 0, 0, 0) // Normalize to start of day
     const weekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
 
     const filteredPayables = payables.filter(p => {
@@ -386,7 +395,7 @@ export default function AccountsPayablePage() {
         const isOverdue = dueDate < today && p.bill_status !== 'paid'
         const isDueSoon = dueDate >= today && dueDate <= weekFromNow && p.bill_status !== 'paid'
 
-        // Search filter
+        // Search filter - always applies
         if (searchQuery) {
             const query = searchQuery.toLowerCase()
             const matchesName = p.name.toLowerCase().includes(query)
@@ -397,19 +406,24 @@ export default function AccountsPayablePage() {
             if (!matchesName && !matchesVendor && !matchesStaff && !matchesNotes && !matchesInvoice) return false
         }
 
+        // Status filter
         if (filterStatus === 'overdue' && !isOverdue) return false
         if (filterStatus === 'due-soon' && !isDueSoon) return false
         if (filterStatus === 'scheduled' && (isOverdue || isDueSoon || p.bill_status === 'paid')) return false
         if (filterStatus === 'paid' && p.bill_status !== 'paid') return false
 
+        // Payee type filter
         if (filterPayee !== 'all' && p.payee_type !== filterPayee) return false
 
-        // Month/Year filter
+        // Month/Year filter - BUT always show overdue bills (they're urgent!)
         if (filterMonth !== 'all') {
-            if (dueDate.getMonth() !== filterMonth || dueDate.getFullYear() !== filterYear) return false
-        } else if (filterYear) {
-            if (dueDate.getFullYear() !== filterYear) return false
+            // When specific month is selected
+            const matchesMonth = dueDate.getMonth() === filterMonth && dueDate.getFullYear() === filterYear
+            // Always show overdue in 'all' status view, even if month doesn't match
+            if (!matchesMonth && !(isOverdue && filterStatus === 'all')) return false
         }
+        // Note: When "All Months" is selected, we no longer filter by year at all
+        // This fixes the bug where bills from other years were hidden
 
         return true
     })
@@ -447,7 +461,36 @@ export default function AccountsPayablePage() {
         }
     }
 
-    const overdueCount = payables.filter(p => new Date(p.next_due) < today && p.bill_status !== 'paid').length
+    // Clear all filters function
+    const clearFilters = () => {
+        setSearchQuery('')
+        setFilterStatus('all')
+        setFilterPayee('all')
+        setFilterMonth('all')
+        setFilterYear(new Date().getFullYear())
+    }
+
+    // Check if any filters are active
+    const hasActiveFilters = searchQuery !== '' ||
+        filterStatus !== 'all' ||
+        filterPayee !== 'all' ||
+        filterMonth !== 'all'
+
+    // Filter counts for badges
+    const filterCounts = {
+        overdue: payables.filter(p => new Date(p.next_due) < today && p.bill_status !== 'paid').length,
+        dueSoon: payables.filter(p => {
+            const d = new Date(p.next_due)
+            return d >= today && d <= weekFromNow && p.bill_status !== 'paid'
+        }).length,
+        scheduled: payables.filter(p => {
+            const d = new Date(p.next_due)
+            return d > weekFromNow && p.bill_status !== 'paid'
+        }).length,
+        paid: payables.filter(p => p.bill_status === 'paid').length
+    }
+
+    const overdueCount = filterCounts.overdue
 
     const getStatusBadge = (p: Payable) => {
         const dueDate = new Date(p.next_due)
@@ -499,8 +542,24 @@ export default function AccountsPayablePage() {
                         {isGeneratingSalaries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Banknote className="h-4 w-4" />}
                         Generate Salaries
                     </Button>
+                    <Button
+                        variant="outline"
+                        onClick={async () => {
+                            const result = await fixStalePayableStatuses()
+                            if (result.fixed > 0) {
+                                alert(`Fixed ${result.fixed} bill(s) with incorrect status.`)
+                                fetchData()
+                            } else {
+                                alert('All bill statuses are correct.')
+                            }
+                        }}
+                        className="h-10 gap-2 border-emerald-800 text-emerald-400 hover:bg-emerald-900/30"
+                    >
+                        <CheckCircle2 className="h-4 w-4" />
+                        Fix Statuses
+                    </Button>
                     <Button onClick={() => handleOpenModal()} className="h-10 gap-2 bg-white hover:bg-zinc-200 text-black">
-                        <Plus className="h-4 w-4" /> Add Payable
+                        <Plus className="h-4 w-4" />Add Payable
                     </Button>
                 </div>
             </div>
@@ -508,20 +567,20 @@ export default function AccountsPayablePage() {
             {/* Summary Tiles */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
-                    <p className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider">Total Payables</p>
+                    <p className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider">Total Outstanding</p>
                     <p className="text-2xl font-black text-white mt-1">£{summary.totalPayables.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
-                <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
-                    <p className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider">Due Within 7 Days</p>
+                <div className="bg-zinc-900 rounded-xl p-4 border border-rose-900/50">
+                    <p className="text-[10px] font-bold uppercase text-rose-400 tracking-wider">Overdue</p>
+                    <p className="text-2xl font-black text-rose-400 mt-1">£{summary.overdueAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-xl p-4 border border-amber-900/50">
+                    <p className="text-[10px] font-bold uppercase text-amber-400 tracking-wider">Due in 7 Days</p>
                     <p className="text-2xl font-black text-amber-400 mt-1">£{summary.dueWithin7Days.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
-                <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
-                    <p className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider">Merchant Fees</p>
-                    <p className="text-2xl font-black text-sky-400 mt-1">£{summary.merchantFees.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                </div>
-                <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
-                    <p className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider">Staff Liability</p>
-                    <p className="text-2xl font-black text-purple-400 mt-1">£{summary.staffLiability.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                <div className="bg-zinc-900 rounded-xl p-4 border border-sky-900/50">
+                    <p className="text-[10px] font-bold uppercase text-sky-400 tracking-wider">Due This Month</p>
+                    <p className="text-2xl font-black text-sky-400 mt-1">£{summary.dueThisMonth.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
             </div>
 
@@ -567,21 +626,34 @@ export default function AccountsPayablePage() {
                             </svg>
                         </div>
                         <div className="flex items-center gap-2">
-                            {(['all', 'overdue', 'due-soon', 'scheduled', 'paid'] as const).map(f => (
-                                <button
-                                    key={f}
-                                    onClick={() => setFilterStatus(f)}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${filterStatus === f
-                                        ? 'bg-white text-black'
-                                        : 'bg-zinc-900 text-zinc-400 hover:text-white'
-                                        }`}
-                                >
-                                    {f === 'due-soon' ? 'Due Soon' : f.charAt(0).toUpperCase() + f.slice(1)}
-                                    {f === 'overdue' && overdueCount > 0 && (
-                                        <span className="ml-1 text-rose-500">({overdueCount})</span>
-                                    )}
-                                </button>
-                            ))}
+                            {(['all', 'overdue', 'due-soon', 'scheduled', 'paid'] as const).map(f => {
+                                // Get count for this filter
+                                const count = f === 'overdue' ? filterCounts.overdue
+                                    : f === 'due-soon' ? filterCounts.dueSoon
+                                        : f === 'scheduled' ? filterCounts.scheduled
+                                            : f === 'paid' ? filterCounts.paid
+                                                : null
+
+                                return (
+                                    <button
+                                        key={f}
+                                        onClick={() => setFilterStatus(f)}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${filterStatus === f
+                                            ? 'bg-white text-black'
+                                            : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                                            }`}
+                                    >
+                                        {f === 'due-soon' ? 'Due Soon' : f.charAt(0).toUpperCase() + f.slice(1)}
+                                        {count !== null && count > 0 && (
+                                            <span className={`ml-1 ${f === 'overdue' ? 'text-rose-500'
+                                                : f === 'due-soon' ? 'text-amber-500'
+                                                    : f === 'paid' ? 'text-emerald-500'
+                                                        : 'text-zinc-500'
+                                                }`}>({count})</span>
+                                        )}
+                                    </button>
+                                )
+                            })}
                         </div>
                         <div className="flex items-center gap-2">
                             {(['all', 'vendor', 'staff', 'system'] as const).map(f => (
@@ -631,6 +703,18 @@ export default function AccountsPayablePage() {
                                 ))}
                             </select>
                         </div>
+                        {/* Clear Filters */}
+                        {hasActiveFilters && (
+                            <button
+                                onClick={clearFilters}
+                                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors flex items-center gap-1"
+                            >
+                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                                Clear
+                            </button>
+                        )}
                         {/* View Toggle */}
                         <div className="flex items-center gap-1 ml-auto bg-zinc-900 rounded-lg p-1">
                             <button
@@ -823,12 +907,14 @@ export default function AccountsPayablePage() {
                                                             <div className="flex items-center justify-end gap-1">
                                                                 {p.bill_status !== 'paid' && (
                                                                     <>
-                                                                        {Number(p.amount_paid) === 0 && (
-                                                                            <button onClick={() => handleMarkPaid(p)} className="p-2 text-zinc-500 hover:text-emerald-500" title="Mark Paid">
-                                                                                <CheckCircle2 className="h-4 w-4" />
-                                                                            </button>
-                                                                        )}
-                                                                        <button onClick={() => openLinkModal(p)} className="p-2 text-zinc-500 hover:text-sky-400" title="Link Transaction">
+                                                                        <button
+                                                                            onClick={(e) => { e.stopPropagation(); handleMarkPaid(p) }}
+                                                                            className="p-2 text-zinc-500 hover:text-emerald-500"
+                                                                            title="Mark as Paid"
+                                                                        >
+                                                                            <CheckCircle2 className="h-4 w-4" />
+                                                                        </button>
+                                                                        <button onClick={(e) => { e.stopPropagation(); openLinkModal(p) }} className="p-2 text-zinc-500 hover:text-sky-400" title="Link Transaction">
                                                                             <Link2 className="h-4 w-4" />
                                                                         </button>
                                                                     </>
