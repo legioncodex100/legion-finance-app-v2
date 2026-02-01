@@ -33,6 +33,7 @@ import { createClient } from "@/lib/supabase/client"
 import Link from "next/link"
 import { StatCard } from "@/components/dashboard/stat-card"
 import { getInFlightCash } from "@/lib/actions/in-flight-cash"
+import { getCurrentBankBalance } from "@/lib/actions/cash-flow"
 
 interface DashboardStats {
     bankBalance: number
@@ -144,18 +145,8 @@ export default function DashboardPage() {
         const lastMonthIncome = lastMonthTx?.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0) || 0
         const lastMonthExpenses = lastMonthTx?.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(Number(t.amount)), 0) || 0
 
-        // Fetch bank balance from user settings
-        const { data: settings } = await supabase
-            .from('user_settings')
-            .select('opening_balance')
-            .single()
-
-        const { data: allTx } = await supabase
-            .from('transactions')
-            .select('amount')
-
-        const totalNet = allTx?.reduce((s, t) => s + Number(t.amount), 0) || 0
-        const bankBalance = (settings?.opening_balance || 0) + totalNet
+        // Fetch bank balance (uses live Starling balance if available, otherwise calculated)
+        const bankBalance = await getCurrentBankBalance()
 
         // Fetch Mindbody member stats
         const { data: members } = await supabase
