@@ -106,6 +106,13 @@ export default function DashboardPage() {
     const [isLoading, setIsLoading] = React.useState(true)
     const supabase = createClient()
 
+    // Compute previous month name once to avoid hydration mismatch
+    const previousMonthName = React.useMemo(() => {
+        const now = new Date()
+        return new Date(now.getFullYear(), now.getMonth() - 1, 1)
+            .toLocaleString('default', { month: 'short' })
+    }, [])
+
     React.useEffect(() => {
         fetchDashboardData()
     }, [])
@@ -153,12 +160,26 @@ export default function DashboardPage() {
         // Fetch Mindbody member stats
         const { data: members } = await supabase
             .from('mb_members')
-            .select('membership_status, monthly_rate, created_at')
+            .select('membership_status, monthly_rate, created_at, synced_at')
             .in('membership_status', ['Active', 'Declined'])
 
         const activeMembers = members?.filter(m => m.membership_status === 'Active').length || 0
         const monthlyMRR = members?.filter(m => m.membership_status === 'Active').reduce((s, m) => s + (m.monthly_rate || 0), 0) || 0
-        const declinesThisMonth = members?.filter(m => m.membership_status === 'Declined').length || 0
+        // Filter declines to those synced this month (proxy for when status changed)
+        const declinesThisMonth = members?.filter(m =>
+            m.membership_status === 'Declined' &&
+            m.synced_at && new Date(m.synced_at) >= new Date(thisMonthStart)
+        ).length || 0
+
+        // Fetch at-risk members (active but haven't visited in 35-45 days)
+        const thirtyFiveDaysAgo = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+        const fortyFiveDaysAgo = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+        const { count: atRiskCount } = await supabase
+            .from('mb_members')
+            .select('id', { count: 'exact', head: true })
+            .eq('membership_status', 'Active')
+            .lt('last_visit_date', thirtyFiveDaysAgo)
+            .gte('last_visit_date', fortyFiveDaysAgo)
 
         // Fetch unreconciled count
         const { count: unreconciledCount } = await supabase
@@ -265,7 +286,7 @@ export default function DashboardPage() {
             monthlyMRR,
             mrrChange: 0,
             declinesThisMonth,
-            atRiskMembers: 0, // Would need churn analysis
+            atRiskMembers: atRiskCount || 0,
             unreconciledCount: unreconciledCount || 0,
             billsDueThisWeek: billsDueCount || 0,
             overdueInvoices: 0,
@@ -331,7 +352,7 @@ export default function DashboardPage() {
                     valuePrefix="+£"
                     icon={ArrowUpRight}
                     status="success"
-                    subtext={`vs ${new Date().toLocaleString('default', { month: 'short' })} previous`}
+                    subtext={`vs ${previousMonthName}`}
                 />
 
                 <StatCard
@@ -340,7 +361,7 @@ export default function DashboardPage() {
                     valuePrefix="-£"
                     icon={ArrowDownRight}
                     status="danger"
-                    subtext={`vs ${new Date().toLocaleString('default', { month: 'short' })} previous`}
+                    subtext={`vs ${previousMonthName}`}
                 />
 
                 <StatCard
